@@ -18,6 +18,7 @@ const GAME_HEIGHT = 800;
 const PLAYER_SIZE = 20;
 const MAX_PLAYERS_PER_GAME = 5;
 const MIN_PLAYERS_PER_GAME = 2;
+const LOBBY_COUNTDOWN_SECONDS = 10;
 
 const TOTAL_PANELS = 8;
 const PANELS_NEED_FIX = 6;
@@ -64,27 +65,59 @@ async function loadRolesFromDB(lobbyId) {
   }
 }
 
-// Create or join a game
-function findOrCreateGame(playerId, playerName) {
-  // Try to find an existing game with space
-  for (let [gameId, game] of games.entries()) {
+// Create or join a game by lobbyId (from Lambda/DynamoDB)
+function findOrCreateGameByLobbyId(lobbyId, playerId, playerName) {
+  const trimmedLobbyId = lobbyId && String(lobbyId).trim();
+  if (trimmedLobbyId && games.has(trimmedLobbyId)) {
+    const game = games.get(trimmedLobbyId);
     if (game.players.size < MAX_PLAYERS_PER_GAME && game.state === 'waiting') {
-      return gameId;
+      console.log(`[Lobby] Joining existing game ${trimmedLobbyId}`);
+      return trimmedLobbyId;
     }
   }
-  
-  // Create new game
-  const gameId = generateId();
+  // Fallback: find any waiting game with space (only if no lobbyId - avoid splitting same-lobby players)
+  if (!trimmedLobbyId) {
+    for (let [gameId, game] of games.entries()) {
+      if (game.players.size < MAX_PLAYERS_PER_GAME && game.state === 'waiting') {
+        return gameId;
+      }
+    }
+  }
+  // Create new game (use lobbyId if provided, else generate)
+  const gameId = trimmedLobbyId || generateId();
+  console.log(`[Lobby] Creating new game ${gameId}`);
   const game = {
     id: gameId,
     players: new Map(),
     state: 'waiting',
     panelsNeedFix: [],
+    countdownTimer: null,
     createdAt: Date.now()
   };
   
   games.set(gameId, game);
   return gameId;
+}
+
+// Start 10-second countdown when lobby is filled, then start game
+function scheduleGameStart(gameId) {
+  const game = games.get(gameId);
+  if (!game || game.state !== 'waiting' || game.countdownTimer) return;
+
+  let secondsLeft = LOBBY_COUNTDOWN_SECONDS;
+  broadcastToGame(gameId, { type: 'gameStartCountdown', secondsLeft });
+
+  game.countdownTimer = setInterval(() => {
+    secondsLeft--;
+    broadcastToGame(gameId, { type: 'gameStartCountdown', secondsLeft });
+
+    if (secondsLeft <= 0) {
+      clearInterval(game.countdownTimer);
+      game.countdownTimer = null;
+      startGame(gameId);
+      broadcastToGame(gameId, { type: 'gameStart', gameId });
+    }
+  }, 1000);
 }
 
 // Select random panel IDs that need fixing
@@ -163,14 +196,16 @@ wss.on('connection', (ws) => {
     try {
       const message = JSON.parse(data);
       
-      // Player joins game
+      // Player joins game (lobbyId/playerId from Lambda, or generated)
       if (message.type === 'join') {
-        playerId = generateId();
+        const lobbyId = typeof message.lobbyId === 'string' ? message.lobbyId.trim() : message.lobbyId;
+        playerId = (message.playerId && String(message.playerId).trim()) || generateId();
         const playerName = message.name || `Player_${playerId.substr(0, 5)}`;
-        
-        gameId = findOrCreateGame(playerId, playerName);
+
+        gameId = findOrCreateGameByLobbyId(lobbyId, playerId, playerName);
         const game = games.get(gameId);
-        
+        console.log(`[Join] lobbyId=${lobbyId} playerId=${playerId} gameId=${gameId} playersInGame=${game.players.size}`);
+
         const color = generateRandomColor();
 
         // If game already started, load roles
@@ -201,6 +236,7 @@ wss.on('connection', (ws) => {
           type: 'welcomeMessage',
           playerId,
           gameId,
+          lobbyId: gameId,
           playerName,
           role: player.role,
           color
@@ -209,9 +245,9 @@ wss.on('connection', (ws) => {
         // Update all players in game
         broadcastToGame(gameId, getGameState(gameId));
 
-        // Start game when minimum players reached
-        if (game.players.size >= MIN_PLAYERS_PER_GAME && game.state === 'waiting') {
-          startGame(gameId);
+        // When lobby is filled (max players), start 10-second countdown then game
+        if (game.players.size >= MAX_PLAYERS_PER_GAME && game.state === 'waiting') {
+          scheduleGameStart(gameId);
         }
 
         // If game already started, send panelsNeedFix to the new joiner
@@ -278,7 +314,13 @@ wss.on('connection', (ws) => {
       const game = games.get(gameId);
       if (game) {
         game.players.delete(playerId);
-        
+
+        // Cancel countdown if we drop below max players during lobby (lobby no longer filled)
+        if (game.state === 'waiting' && game.countdownTimer && game.players.size < MAX_PLAYERS_PER_GAME) {
+          clearInterval(game.countdownTimer);
+          game.countdownTimer = null;
+        }
+
         // Remove empty games
         if (game.players.size === 0) {
           games.delete(gameId);

@@ -10,9 +10,10 @@ import { startGameLoop } from './gameLoop.js';
 
 export class GameLogic {
   constructor() {
-    this.playerId = null;
-    this.gameId = null;
-    this.playerName = `Player_${Math.random().toString(36).substring(2, 7)}`;
+    const ctx = this.loadGameContext();
+    this.playerId = ctx?.playerId ?? null;
+    this.gameId = ctx?.lobbyId ?? null;
+    this.playerName = ctx?.playerName ?? `Player_${Math.random().toString(36).substring(2, 7)}`;
     this.players = new Map();
     this.otherPlayers = new Map();
     this.controlPanels = new Map();
@@ -63,18 +64,48 @@ export class GameLogic {
     this.fpsCamera = new FPSCamera(this.camera, this.character);
   }
 
+  loadGameContext() {
+    try {
+      const raw = sessionStorage.getItem('gameContext');
+      return raw ? JSON.parse(raw) : null;
+    } catch {
+      return null;
+    }
+  }
+
   getWebSocketUrl() {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    return `${protocol}//${window.location.hostname}:8080`;
+    const localEndpoint = import.meta.env.VITE_SERVER_ENDPOINT || 'localhost:8080';
+    const useLocalWs = import.meta.env.VITE_USE_LOCAL_WS === 'true';
+
+    if (useLocalWs) {
+      return localEndpoint.startsWith('ws') ? localEndpoint : `${protocol}//${localEndpoint}`;
+    }
+
+    const ctx = this.loadGameContext();
+    let endpoint = ctx?.serverEndpoint ?? ctx?.ServerEndpoint;
+    if (!endpoint || typeof endpoint !== 'string' || endpoint.includes('?') || endpoint.length < 5) {
+      endpoint = localEndpoint;
+    }
+    if (endpoint.startsWith('ws://') || endpoint.startsWith('wss://')) {
+      return endpoint;
+    }
+    return `${protocol}//${endpoint}`;
   }
 
   connect() {
     try {
+      this.wsUrl = this.getWebSocketUrl();
       this.ws = new WebSocket(this.wsUrl);
 
       this.ws.onopen = () => {
         this.updateStatus('Connected', true);
-        this.ws.send(JSON.stringify({ type: 'join', name: this.playerName }));
+        this.ws.send(JSON.stringify({
+          type: 'join',
+          lobbyId: this.gameId,
+          playerId: this.playerId,
+          name: this.playerName,
+        }));
         startGameLoop(this);
       };
 
