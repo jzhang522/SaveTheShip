@@ -134,7 +134,7 @@ async function handleMatchmake(playerName) {
 
     // CREATE NEW LOBBY if no waiting lobby found
     const now = Math.floor(Date.now() / 1000);
-    const newLobbyId = `LOBBY#${Date.now()}`;
+    const newLobbyId = `LOBBY#${uuidv4()}`;
     const newLobbyItem = {
         PK: newLobbyId,
         SK: "METADATA",

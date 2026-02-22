@@ -1,7 +1,7 @@
 const WebSocket = require('ws');
 const http = require('http');
 const { DynamoDBClient } = require("@aws-sdk/client-dynamodb");
-const { DynamoDBDocumentClient, QueryCommand } = require("@aws-sdk/lib-dynamodb");
+const { DynamoDBDocumentClient, QueryCommand, GetCommand } = require("@aws-sdk/lib-dynamodb");
 
 const PORT = process.env.PORT || 8080;
 
@@ -62,6 +62,23 @@ async function loadRolesFromDB(lobbyId) {
   } catch (err) {
     console.error("Failed to load roles from DB:", err);
     return {};
+  }
+}
+
+const TABLE_NAME = "SaveTheShipGameLobbies";
+
+// Validate that player exists in lobby in DynamoDB (required for lobbyId from matchmaking)
+async function validatePlayerInLobby(lobbyId, playerId) {
+  if (!lobbyId || !playerId) return false;
+  try {
+    const res = await ddb.send(new GetCommand({
+      TableName: TABLE_NAME,
+      Key: { PK: lobbyId, SK: `PLAYER#${playerId}` }
+    }));
+    return !!res.Item;
+  } catch (err) {
+    console.error("Failed to validate player in lobby:", err);
+    return false;
   }
 }
 
@@ -201,6 +218,17 @@ wss.on('connection', (ws) => {
         const lobbyId = typeof message.lobbyId === 'string' ? message.lobbyId.trim() : message.lobbyId;
         playerId = (message.playerId && String(message.playerId).trim()) || generateId();
         const playerName = message.name || `Player_${playerId.substr(0, 5)}`;
+
+        // Validate against DynamoDB when lobbyId is provided (from matchmaking)
+        if (lobbyId && playerId) {
+          const isValid = await validatePlayerInLobby(lobbyId, playerId);
+          if (!isValid) {
+            console.log(`[Join] Rejected: invalid lobby session lobbyId=${lobbyId} playerId=${playerId}`);
+            ws.send(JSON.stringify({ type: 'error', message: 'Invalid lobby session' }));
+            ws.close();
+            return;
+          }
+        }
 
         gameId = findOrCreateGameByLobbyId(lobbyId, playerId, playerName);
         const game = games.get(gameId);
