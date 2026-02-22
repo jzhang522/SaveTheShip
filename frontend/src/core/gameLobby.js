@@ -82,9 +82,10 @@ function connectWebSocket(playerName, data) {
         const joinPayload = { type: "join", lobbyId, playerId, name: playerName };
         console.log("[Lobby] Joining with", joinPayload);
         ws.send(JSON.stringify(joinPayload));
-        const statusEl = document.getElementById("status");
+        const statusEl = document.getElementById("lobbyStatus") || document.getElementById("status");
         if (statusEl) {
             statusEl.classList.add("success");
+            statusEl.classList.remove("error");
             statusEl.textContent = "Connected to game server";
         }
     };
@@ -116,13 +117,19 @@ function connectWebSocket(playerName, data) {
     };
 
     ws.onerror = () => {
-        document.getElementById("status").textContent = "WebSocket error";
-        document.getElementById("status").classList.add("error");
+        const statusEl = document.getElementById("lobbyStatus") || document.getElementById("status");
+        if (statusEl) {
+            statusEl.textContent = "WebSocket error";
+            statusEl.classList.add("error");
+        }
     };
 
     ws.onclose = () => {
-        document.getElementById("status").textContent = "Disconnected from game server";
-        document.getElementById("status").classList.remove("success");
+        const statusEl = document.getElementById("lobbyStatus") || document.getElementById("status");
+        if (statusEl) {
+            statusEl.textContent = "Disconnected from game server";
+            statusEl.classList.remove("success");
+        }
     };
 }
 
@@ -137,12 +144,13 @@ function navigateToGame(lobbyData, gameStartMsg, playerName) {
     const serverEndpoint = lobbyData?.serverEndpoint ??
         (lobbyData?.serverIp && lobbyData?.port != null ? `${lobbyData.serverIp}:${lobbyData.port}` : null);
     const context = {
-        lobbyId: lobbyData?.lobbyId || gameStartMsg?.gameId,
-        playerId: lobbyData?.playerId || gameStartMsg?.playerId,
+        lobbyId: lobbyData?.lobbyId ?? lobbyData?.LobbyId ?? gameStartMsg?.gameId,
+        playerId: lobbyData?.playerId ?? lobbyData?.PlayerId ?? gameStartMsg?.playerId,
         playerName: playerName || currentPlayerName,
         serverEndpoint,
     };
     sessionStorage.setItem("gameContext", JSON.stringify(context));
+    clearLobbyContext();
     window.location.href = "game.html";
 }
 
@@ -195,6 +203,33 @@ function showLobbyView(playerName, data) {
     }
 }
 
+const LOBBY_CONTEXT_KEY = "lobbyContext";
+
+function storeLobbyContext(playerName, data) {
+    const ctx = {
+        lobbyId: data?.lobbyId ?? data?.LobbyId,
+        playerId: data?.playerId ?? data?.PlayerId,
+        playerName: playerName,
+        serverEndpoint: data?.serverEndpoint ?? data?.ServerEndpoint,
+        serverIp: data?.serverIp,
+        port: data?.port,
+    };
+    sessionStorage.setItem(LOBBY_CONTEXT_KEY, JSON.stringify(ctx));
+}
+
+function loadStoredLobbyContext() {
+    try {
+        const raw = sessionStorage.getItem(LOBBY_CONTEXT_KEY);
+        return raw ? JSON.parse(raw) : null;
+    } catch {
+        return null;
+    }
+}
+
+function clearLobbyContext() {
+    sessionStorage.removeItem(LOBBY_CONTEXT_KEY);
+}
+
 function escapeHtml(text) {
     const div = document.createElement("div");
     div.textContent = text;
@@ -238,6 +273,7 @@ async function findMatch() {
         if (typeof data?.body === "string") {
             data = JSON.parse(data.body);
         }
+        storeLobbyContext(name, data);
         showLobbyView(name, data);
         connectWebSocket(name, data);
     } catch (err) {
@@ -248,3 +284,15 @@ async function findMatch() {
 }
 
 document.getElementById("findMatchBtn")?.addEventListener("click", findMatch);
+
+// On load: if we have stored lobby context (e.g. after refresh), rejoin the lobby
+function initLobby() {
+    const stored = loadStoredLobbyContext();
+    if (stored?.lobbyId && stored?.playerName) {
+        showLobbyView(stored.playerName, stored);
+        const statusEl = document.getElementById("lobbyStatus");
+        if (statusEl) statusEl.textContent = "Reconnecting to lobby...";
+        connectWebSocket(stored.playerName, stored);
+    }
+}
+initLobby();

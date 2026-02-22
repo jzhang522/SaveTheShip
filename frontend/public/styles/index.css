@@ -196,7 +196,12 @@ button:disabled {
     color: #64748b;
     text-transform: uppercase;
     letter-spacing: 0.08em;
-    margin-bottom: 1.5rem;
+    margin-bottom: 0.5rem;
+}
+
+.lobby-status {
+    margin-bottom: 1rem;
+    min-height: 1.25rem;
 }
 
 .lobby-info {
