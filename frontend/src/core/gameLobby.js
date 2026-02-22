@@ -217,6 +217,32 @@ function showLobbyView(playerName, data) {
 
 const LOBBY_CONTEXT_KEY = "lobbyContext";
 
+function sendLeaveMessage(opts = {}) {
+    const ctx = loadStoredLobbyContext();
+    const lobbyId = ctx?.lobbyId;
+    const playerId = ctx?.playerId;
+    if (!lobbyId || !playerId) return Promise.resolve();
+
+    // Call Lambda API to remove player from DynamoDB
+    const leavePromise = API_URL
+        ? fetch(API_URL, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ action: "leave", lobbyId, playerId }),
+              keepalive: opts.keepalive ?? true
+          }).catch(() => {})
+        : Promise.resolve();
+
+    // Also notify WebSocket server for in-memory cleanup
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        try {
+            ws.send(JSON.stringify({ type: "leave", lobbyId, playerId }));
+        } catch (_) { /* best-effort */ }
+    }
+
+    return leavePromise;
+}
+
 function storeLobbyContext(playerName, data) {
     const ctx = {
         lobbyId: data?.lobbyId ?? data?.LobbyId,
@@ -296,6 +322,21 @@ async function findMatch() {
 }
 
 document.getElementById("findMatchBtn")?.addEventListener("click", findMatch);
+
+document.getElementById("leaveLobbyBtn")?.addEventListener("click", async () => {
+    await sendLeaveMessage({ keepalive: false });
+    if (ws) {
+        ws.close();
+        ws = null;
+    }
+    clearLobbyContext();
+    document.getElementById("lobbyView")?.classList.remove("visible");
+    document.getElementById("matchmakingCard")?.classList.remove("hidden");
+});
+
+// Notify server when user closes tab/browser so lobby can be cleaned up
+window.addEventListener("beforeunload", sendLeaveMessage);
+window.addEventListener("pagehide", sendLeaveMessage);
 
 // On load: if we have stored lobby context (e.g. after refresh), validate then rejoin
 async function initLobby() {

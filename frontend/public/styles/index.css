@@ -385,3 +385,17 @@ button:disabled {
     color: #38bdf8;
     font-weight: 600;
 }
+
+.leave-btn {
+    margin-top: 1.5rem;
+    background: transparent;
+    color: #94a3b8;
+    box-shadow: none;
+    border: 1px solid rgba(148, 163, 184, 0.3);
+}
+
+.leave-btn:hover {
+    background: rgba(248, 113, 113, 0.15);
+    color: #f87171;
+    border-color: rgba(248, 113, 113, 0.4);
+}

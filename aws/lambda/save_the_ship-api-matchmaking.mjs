@@ -4,7 +4,8 @@ import {
     PutCommand,
     UpdateCommand,
     QueryCommand,
-    GetCommand
+    GetCommand,
+    DeleteCommand
 } from "@aws-sdk/lib-dynamodb";
 import { v4 as uuidv4 } from "uuid";
 
@@ -17,7 +18,16 @@ const MAX_PLAYERS = 5;
 const SERVER_ENDPOINT = "????????????????????????????????????????"; // TODO: Change to the actual server endpoint
 
 export const handler = async (event) => {
-    const body = event.body ? JSON.parse(event.body) : {};
+    let body = {};
+    try {
+        if (event.body) {
+            const raw = typeof event.body === "string" ? event.body : Buffer.from(event.body, "base64").toString("utf8");
+            body = raw ? JSON.parse(raw) : {};
+        }
+    } catch (e) {
+        console.error("Body parse error:", e);
+        return response(400, { message: "Invalid request body" });
+    }
     const action = body.action;
     const lobbyId = body.pkLobbyId || body.lobbyId;
 
@@ -27,6 +37,8 @@ export const handler = async (event) => {
                 return await handleMatchmake(body.playerName);
             case "validateSession":
                 return await handleValidateSession(lobbyId, body.playerId);
+            case "leave":
+                return await handleLeave(lobbyId, body.playerId);
             case "start":
                 return await startGame(lobbyId);
             case "finish":
@@ -206,6 +218,63 @@ async function handleValidateSession(lobbyId, playerId) {
     } catch (err) {
         console.error("validateSession error:", err);
         return response(200, { valid: false });
+    }
+}
+
+// -------------------------
+// Remove player from lobby (browser close, leave button, etc.)
+// -------------------------
+async function handleLeave(lobbyId, playerId) {
+    if (!lobbyId || !playerId) {
+        return response(400, { ok: false, message: "lobbyId and playerId required" });
+    }
+    if (!String(lobbyId).startsWith("LOBBY#")) {
+        return response(400, { ok: false, message: "Invalid lobbyId format" });
+    }
+    try {
+        await ddb.send(new DeleteCommand({
+            TableName: TABLE_NAME,
+            Key: { PK: lobbyId, SK: `PLAYER#${playerId}` }
+        }));
+        await ddb.send(new UpdateCommand({
+            TableName: TABLE_NAME,
+            Key: { PK: lobbyId, SK: "METADATA" },
+            UpdateExpression: "SET playerCount = playerCount - :one",
+            ConditionExpression: "playerCount > :zero",
+            ExpressionAttributeValues: { ":one": 1, ":zero": 0 }
+        }));
+        const res = await ddb.send(new GetCommand({
+            TableName: TABLE_NAME,
+            Key: { PK: lobbyId, SK: "METADATA" }
+        }));
+        const meta = res.Item;
+        const newCount = meta?.playerCount ?? 0;
+        if (meta && newCount > 0) {
+            const newStatus = meta.status === "full" ? "waiting" : meta.status;
+            await ddb.send(new UpdateCommand({
+                TableName: TABLE_NAME,
+                Key: { PK: lobbyId, SK: "METADATA" },
+                UpdateExpression: "SET #s = :status, gsiSK = :gsiSK",
+                ExpressionAttributeNames: { "#s": "status" },
+                ExpressionAttributeValues: { ":status": newStatus, ":gsiSK": `${newStatus}#${newCount}` }
+            }));
+        } else if (meta && newCount === 0) {
+            const now = Math.floor(Date.now() / 1000);
+            await ddb.send(new UpdateCommand({
+                TableName: TABLE_NAME,
+                Key: { PK: lobbyId, SK: "METADATA" },
+                UpdateExpression: "SET #s = :expired, ttl = :ttl",
+                ExpressionAttributeNames: { "#s": "status" },
+                ExpressionAttributeValues: { ":expired": "expired", ":ttl": now + 60 }
+            }));
+        }
+        return response(200, { ok: true });
+    } catch (err) {
+        if (err.name === "ConditionalCheckFailedException") {
+            return response(200, { ok: true });
+        }
+        console.error("handleLeave error:", err);
+        return response(500, { ok: false, message: err.message });
     }
 }
 

@@ -1,7 +1,7 @@
 const WebSocket = require('ws');
 const http = require('http');
 const { DynamoDBClient } = require("@aws-sdk/client-dynamodb");
-const { DynamoDBDocumentClient, QueryCommand, GetCommand } = require("@aws-sdk/lib-dynamodb");
+const { DynamoDBDocumentClient, QueryCommand, GetCommand, DeleteCommand, UpdateCommand } = require("@aws-sdk/lib-dynamodb");
 
 const PORT = process.env.PORT || 8080;
 
@@ -79,6 +79,64 @@ async function validatePlayerInLobby(lobbyId, playerId) {
   } catch (err) {
     console.error("Failed to validate player in lobby:", err);
     return false;
+  }
+}
+
+// Remove player from DynamoDB lobby when they leave (browser close, disconnect, etc.)
+async function removePlayerFromDynamoDBLobby(lobbyId, playerId) {
+  if (!lobbyId || !playerId) return;
+  // Only update DynamoDB for matchmaking lobbies (LOBBY#uuid format)
+  if (!String(lobbyId).startsWith("LOBBY#")) return;
+  try {
+    await ddb.send(new DeleteCommand({
+      TableName: TABLE_NAME,
+      Key: { PK: lobbyId, SK: `PLAYER#${playerId}` }
+    }));
+    // Decrement playerCount and update status/gsiSK
+    await ddb.send(new UpdateCommand({
+      TableName: TABLE_NAME,
+      Key: { PK: lobbyId, SK: "METADATA" },
+      UpdateExpression: "SET playerCount = playerCount - :one",
+      ConditionExpression: "playerCount > :zero",
+      ExpressionAttributeValues: { ":one": 1, ":zero": 0 }
+    }));
+    // Fetch current count to update status and gsiSK
+    const res = await ddb.send(new GetCommand({
+      TableName: TABLE_NAME,
+      Key: { PK: lobbyId, SK: "METADATA" }
+    }));
+    const meta = res.Item;
+    const newCount = meta?.playerCount ?? 0;
+    if (meta && newCount > 0) {
+      const newStatus = meta.status === "full" ? "waiting" : meta.status;
+      const newGsiSK = `${newStatus}#${newCount}`;
+      await ddb.send(new UpdateCommand({
+        TableName: TABLE_NAME,
+        Key: { PK: lobbyId, SK: "METADATA" },
+        UpdateExpression: "SET #s = :status, gsiSK = :gsiSK",
+        ExpressionAttributeNames: { "#s": "status" },
+        ExpressionAttributeValues: { ":status": newStatus, ":gsiSK": newGsiSK }
+      }));
+    }
+    if (meta && newCount === 0) {
+      await ddb.send(new UpdateCommand({
+        TableName: TABLE_NAME,
+        Key: { PK: lobbyId, SK: "METADATA" },
+        UpdateExpression: "SET #s = :expired, ttl = :ttl",
+        ExpressionAttributeNames: { "#s": "status" },
+        ExpressionAttributeValues: {
+          ":expired": "expired",
+          ":ttl": Math.floor(Date.now() / 1000) + 60
+        }
+      }));
+    }
+    console.log(`[Lobby] Removed player ${playerId} from DynamoDB lobby ${lobbyId}`);
+  } catch (err) {
+    if (err.name === "ConditionalCheckFailedException") {
+      // playerCount already 0 or item missing
+      return;
+    }
+    console.error("Failed to remove player from DynamoDB:", err);
   }
 }
 
@@ -332,6 +390,31 @@ wss.on('connection', (ws) => {
           console.log(`Panel ${message.panelId} fixed by ${playerId}. Remaining: [${game.panelsNeedFix.join(', ')}]`);
         }
       }
+
+      // Player explicitly leaves (e.g. before browser close)
+      if (message.type === 'leave' && playerId && gameId) {
+        const game = games.get(gameId);
+        if (game) {
+          game.players.delete(playerId);
+          removePlayerFromDynamoDBLobby(gameId, playerId).catch((err) =>
+            console.error("[Lobby] DynamoDB cleanup error:", err)
+          );
+          if (game.state === 'waiting' && game.countdownTimer && game.players.size < MAX_PLAYERS_PER_GAME) {
+            clearInterval(game.countdownTimer);
+            game.countdownTimer = null;
+          }
+          if (game.players.size === 0) {
+            games.delete(gameId);
+          } else {
+            broadcastToGame(gameId, getGameState(gameId));
+          }
+          players.delete(playerId);
+        }
+        playerId = null;
+        gameId = null;
+        ws.close();
+        return;
+      }
     } catch (error) {
       console.error('Message handling error:', error);
     }
@@ -342,6 +425,11 @@ wss.on('connection', (ws) => {
       const game = games.get(gameId);
       if (game) {
         game.players.delete(playerId);
+
+        // Remove player from DynamoDB when browser closes / disconnects
+        removePlayerFromDynamoDBLobby(gameId, playerId).catch((err) =>
+          console.error("[Lobby] DynamoDB cleanup error:", err)
+        );
 
         // Cancel countdown if we drop below max players during lobby (lobby no longer filled)
         if (game.state === 'waiting' && game.countdownTimer && game.players.size < MAX_PLAYERS_PER_GAME) {
