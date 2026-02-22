@@ -5,8 +5,8 @@ const { DynamoDBDocumentClient, QueryCommand, GetCommand, DeleteCommand, UpdateC
 
 const PORT = process.env.PORT || 8080;
 
-// DynamoDB setup
-const client = new DynamoDBClient({});
+// DynamoDB setup (region must match Lambda/table, e.g. us-west-2)
+const client = new DynamoDBClient({ region: process.env.AWS_REGION || "us-west-2" });
 const ddb = DynamoDBDocumentClient.from(client);
 
 // Game state
@@ -17,8 +17,8 @@ const GAME_WIDTH = 1400;
 const GAME_HEIGHT = 800;
 const PLAYER_SIZE = 20;
 const MAX_PLAYERS_PER_GAME = 5;
-const MIN_PLAYERS_PER_GAME = 2;
-const LOBBY_COUNTDOWN_SECONDS = 10;
+const MIN_PLAYERS_PER_GAME = 1; // TODO: Change to 2
+const LOBBY_COUNTDOWN_SECONDS = 1; // TODO: Change to 10
 
 const TOTAL_PANELS = 8;
 const PANELS_NEED_FIX = 6;
@@ -75,9 +75,13 @@ async function validatePlayerInLobby(lobbyId, playerId) {
       TableName: TABLE_NAME,
       Key: { PK: lobbyId, SK: `PLAYER#${playerId}` }
     }));
-    return !!res.Item;
+    if (!res.Item) {
+      console.log(`[Join] Player not in DynamoDB lobby (may have left or been removed)`);
+      return false;
+    }
+    return true;
   } catch (err) {
-    console.error("Failed to validate player in lobby:", err);
+    console.error("[Join] DynamoDB validation failed (check AWS credentials/region):", err.message);
     return false;
   }
 }
@@ -338,8 +342,8 @@ wss.on('connection', (ws) => {
         // Update all players in game
         broadcastToGame(gameId, getGameState(gameId));
 
-        // When lobby is filled (max players), start 10-second countdown then game
-        if (game.players.size >= MAX_PLAYERS_PER_GAME && game.state === 'waiting') {
+        // When lobby has enough players (min), start 10-second countdown then game
+        if (game.players.size >= MIN_PLAYERS_PER_GAME && game.state === 'waiting') {
           scheduleGameStart(gameId);
         }
 
@@ -406,7 +410,7 @@ wss.on('connection', (ws) => {
           removePlayerFromDynamoDBLobby(gameId, playerId).catch((err) =>
             console.error("[Lobby] DynamoDB cleanup error:", err)
           );
-          if (game.state === 'waiting' && game.countdownTimer && game.players.size < MAX_PLAYERS_PER_GAME) {
+          if (game.state === 'waiting' && game.countdownTimer && game.players.size < MIN_PLAYERS_PER_GAME) {
             clearInterval(game.countdownTimer);
             game.countdownTimer = null;
           }
@@ -447,8 +451,8 @@ wss.on('connection', (ws) => {
         if (!global.pendingDynamoRemovals) global.pendingDynamoRemovals = new Map();
         global.pendingDynamoRemovals.set(removalKey, removalTimer);
 
-        // Cancel countdown if we drop below max players during lobby (lobby no longer filled)
-        if (game.state === 'waiting' && game.countdownTimer && game.players.size < MAX_PLAYERS_PER_GAME) {
+        // Cancel countdown if we drop below min players during lobby (lobby no longer filled)
+        if (game.state === 'waiting' && game.countdownTimer && game.players.size < MIN_PLAYERS_PER_GAME) {
           clearInterval(game.countdownTimer);
           game.countdownTimer = null;
         }

@@ -117,6 +117,14 @@ function connectWebSocket(playerName, data) {
             if (msg.type === "gameStart") {
                 navigateToGame(data, msg, currentPlayerName);
             }
+            if (msg.type === "error") {
+                const statusEl = document.getElementById("lobbyStatus") || document.getElementById("status");
+                if (statusEl) {
+                    statusEl.textContent = msg.message || "Session invalid. Please find a new match.";
+                    statusEl.classList.add("error");
+                }
+                clearLobbyContext();
+            }
         } catch (e) {
             console.warn("WebSocket message parse error:", e);
         }
