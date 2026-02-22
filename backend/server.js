@@ -316,6 +316,13 @@ wss.on('connection', (ws) => {
         
         game.players.set(playerId, player);
         players.set(playerId, { gameId, ws });
+
+        // Cancel any pending DynamoDB removal (e.g. they navigated to /game and came back)
+        const removalKey = `${gameId}:${playerId}`;
+        if (global.pendingDynamoRemovals?.has(removalKey)) {
+          clearTimeout(global.pendingDynamoRemovals.get(removalKey));
+          global.pendingDynamoRemovals.delete(removalKey);
+        }
         
         // Send welcome message
         ws.send(JSON.stringify({
@@ -423,13 +430,22 @@ wss.on('connection', (ws) => {
   ws.on('close', () => {
     if (playerId && gameId) {
       const game = games.get(gameId);
+      const closedPlayerId = playerId;
+      const closedGameId = gameId;
       if (game) {
         game.players.delete(playerId);
 
-        // Remove player from DynamoDB when browser closes / disconnects
-        removePlayerFromDynamoDBLobby(gameId, playerId).catch((err) =>
-          console.error("[Lobby] DynamoDB cleanup error:", err)
-        );
+        // Delay DynamoDB removal so accidental nav to /game can reconnect within grace period
+        const removalKey = `${closedGameId}:${closedPlayerId}`;
+        const removalTimer = setTimeout(() => {
+          global.pendingDynamoRemovals?.delete(removalKey);
+          removePlayerFromDynamoDBLobby(closedGameId, closedPlayerId).catch((err) =>
+            console.error("[Lobby] DynamoDB cleanup error:", err)
+          );
+        }, 10000);
+
+        if (!global.pendingDynamoRemovals) global.pendingDynamoRemovals = new Map();
+        global.pendingDynamoRemovals.set(removalKey, removalTimer);
 
         // Cancel countdown if we drop below max players during lobby (lobby no longer filled)
         if (game.state === 'waiting' && game.countdownTimer && game.players.size < MAX_PLAYERS_PER_GAME) {

@@ -226,11 +226,11 @@ function sendLeaveMessage(opts = {}) {
     // Call Lambda API to remove player from DynamoDB
     const leavePromise = API_URL
         ? fetch(API_URL, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ action: "leave", lobbyId, playerId }),
-              keepalive: opts.keepalive ?? true
-          }).catch(() => {})
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ action: "leave", lobbyId, playerId }),
+            keepalive: opts.keepalive ?? true
+        }).catch(() => { })
         : Promise.resolve();
 
     // Also notify WebSocket server for in-memory cleanup
@@ -334,12 +334,15 @@ document.getElementById("leaveLobbyBtn")?.addEventListener("click", async () => 
     document.getElementById("matchmakingCard")?.classList.remove("hidden");
 });
 
-// Notify server when user closes tab/browser so lobby can be cleaned up
-window.addEventListener("beforeunload", sendLeaveMessage);
-window.addEventListener("pagehide", sendLeaveMessage);
+// Note: We do NOT use beforeunload/pagehide to send leave - that would incorrectly
+// remove the player when they navigate to /game (e.g. typing URL). Browser/tab close
+// is handled by the backend when the WebSocket disconnects.
 
 // On load: if we have stored lobby context (e.g. after refresh), validate then rejoin
 async function initLobby() {
+    if (window.location.pathname === "/game" || window.location.pathname === "/game/") {
+        window.history.replaceState(null, "", "/");
+    }
     const stored = loadStoredLobbyContext();
     if (!stored?.lobbyId || !stored?.playerId || !stored?.playerName) return;
 
