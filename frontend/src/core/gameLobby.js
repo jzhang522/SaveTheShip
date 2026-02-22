@@ -297,14 +297,41 @@ async function findMatch() {
 
 document.getElementById("findMatchBtn")?.addEventListener("click", findMatch);
 
-// On load: if we have stored lobby context (e.g. after refresh), rejoin the lobby
-function initLobby() {
+// On load: if we have stored lobby context (e.g. after refresh), validate then rejoin
+async function initLobby() {
     const stored = loadStoredLobbyContext();
-    if (stored?.lobbyId && stored?.playerName) {
+    if (!stored?.lobbyId || !stored?.playerId || !stored?.playerName) return;
+
+    const statusDiv = document.getElementById("status");
+    if (statusDiv) statusDiv.textContent = "Validating session...";
+
+    try {
+        const response = await fetch(API_URL, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                action: "validateSession",
+                lobbyId: stored.lobbyId,
+                playerId: stored.playerId,
+            }),
+        });
+        let data = await response.json();
+        if (typeof data?.body === "string") data = JSON.parse(data.body);
+
+        if (!data?.valid) {
+            clearLobbyContext();
+            if (statusDiv) statusDiv.textContent = "Session expired. Please find a new match.";
+            return;
+        }
+        if (statusDiv) statusDiv.textContent = "";
+
         showLobbyView(stored.playerName, stored);
-        const statusEl = document.getElementById("lobbyStatus");
-        if (statusEl) statusEl.textContent = "Reconnecting to lobby...";
+        const lobbyStatusEl = document.getElementById("lobbyStatus");
+        if (lobbyStatusEl) lobbyStatusEl.textContent = "Reconnecting to lobby...";
         connectWebSocket(stored.playerName, stored);
+    } catch {
+        clearLobbyContext();
+        if (statusDiv) statusDiv.textContent = "Could not validate session. Please find a new match.";
     }
 }
 initLobby();

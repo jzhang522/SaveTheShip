@@ -1,8 +1,8 @@
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
-import { 
-    DynamoDBDocumentClient, 
-    PutCommand, 
-    UpdateCommand, 
+import {
+    DynamoDBDocumentClient,
+    PutCommand,
+    UpdateCommand,
     QueryCommand,
     GetCommand
 } from "@aws-sdk/lib-dynamodb";
@@ -13,7 +13,7 @@ const ddb = DynamoDBDocumentClient.from(client);
 
 const TABLE_NAME = "SaveTheShipGameLobbies";
 const GSI_NAME = "status-playerCount-index";
-const MAX_PLAYERS = 5; 
+const MAX_PLAYERS = 5;
 const SERVER_ENDPOINT = "????????????????????????????????????????"; // TODO: Change to the actual server endpoint
 
 export const handler = async (event) => {
@@ -25,6 +25,8 @@ export const handler = async (event) => {
         switch (action) {
             case "matchmake":
                 return await handleMatchmake(body.playerName);
+            case "validateSession":
+                return await handleValidateSession(lobbyId, body.playerId);
             case "start":
                 return await startGame(lobbyId);
             case "finish":
@@ -50,7 +52,7 @@ async function handleMatchmake(playerName) {
     if (playerName.length > 30) {
         return response(400, { message: "playerName too long" });
     }
-    
+
     const playerId = uuidv4();
     const playerObject = {
         playerId,
@@ -92,10 +94,10 @@ async function handleMatchmake(playerName) {
                     TableName: TABLE_NAME,
                     Key: { PK: lobby.PK, SK: "METADATA" },
                     UpdateExpression: `
-                        SET playerCount = :newCount,
-                            #s = :newStatus,
-                            gsiSK = :gsiSK
-                    `,
+                            SET playerCount = :newCount,
+                                #s = :newStatus,
+                                gsiSK = :gsiSK
+                        `,
                     ConditionExpression: "playerCount < :max AND #s = :waiting",
                     ExpressionAttributeNames: { "#s": "status" },
                     ExpressionAttributeValues: {
@@ -174,6 +176,40 @@ async function handleMatchmake(playerName) {
 }
 
 // -------------------------
+// Validate session (for refresh before reconnect)
+// -------------------------
+async function handleValidateSession(lobbyId, playerId) {
+    if (!lobbyId || !playerId) {
+        return response(400, { valid: false, message: "lobbyId and playerId required" });
+    }
+    try {
+        const [lobbyRes, playerRes] = await Promise.all([
+            ddb.send(new GetCommand({
+                TableName: TABLE_NAME,
+                Key: { PK: lobbyId, SK: "METADATA" }
+            })),
+            ddb.send(new GetCommand({
+                TableName: TABLE_NAME,
+                Key: { PK: lobbyId, SK: `PLAYER#${playerId}` }
+            }))
+        ]);
+        const lobby = lobbyRes.Item;
+        const player = playerRes.Item;
+        if (!lobby || !player) {
+            return response(200, { valid: false });
+        }
+        const validStatuses = ["waiting", "full", "in-progress"];
+        if (!validStatuses.includes(lobby.status)) {
+            return response(200, { valid: false });
+        }
+        return response(200, { valid: true });
+    } catch (err) {
+        console.error("validateSession error:", err);
+        return response(200, { valid: false });
+    }
+}
+
+// -------------------------
 // Start game: assign roles
 // -------------------------
 async function startGame(lobbyId) {
@@ -212,7 +248,7 @@ async function startGame(lobbyId) {
             ExpressionAttributeValues: { ":role": role }
         }));
     });
-    
+
     await Promise.all(updatePromises);
 
     // Update lobby status
