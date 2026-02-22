@@ -215,8 +215,29 @@ button:disabled {
     color: #94a3b8;
 }
 
+.lobby-info div + div {
+    margin-top: 0.5rem;
+}
+
 .lobby-info span {
     color: #e2e8f0;
+}
+
+.lobby-info div {
+    display: flex;
+    gap: 0.35rem;
+    min-width: 0;
+}
+
+.lobby-info div strong {
+    flex-shrink: 0;
+}
+
+.lobby-info .lobby-value-truncate {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .players-title {
@@ -278,9 +299,44 @@ button:disabled {
     flex-shrink: 0;
 }
 
-.player-item.empty .avatar {
+.player-item.empty .avatar,
+.player-item .avatar.avatar-waiting {
+    position: relative;
     background: rgba(100, 116, 139, 0.4);
     color: rgba(255, 255, 255, 0.3);
+}
+
+.player-item .avatar.avatar-waiting .avatar-progress {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    animation: avatar-progress-spin 1.2s linear infinite;
+}
+
+.player-item .avatar.avatar-waiting .avatar-progress-bg {
+    fill: none;
+    stroke: rgba(255, 255, 255, 0.08);
+    stroke-width: 2.5;
+}
+
+.player-item .avatar.avatar-waiting .avatar-progress-fill {
+    fill: none;
+    stroke: rgba(148, 163, 184, 0.5);
+    stroke-width: 2.5;
+    stroke-dasharray: 40 100;
+    stroke-linecap: round;
+    transform: rotate(-90deg);
+    transform-origin: center;
+}
+
+.player-item .avatar.avatar-waiting .avatar-icon {
+    position: relative;
+    z-index: 1;
+}
+
+@keyframes avatar-progress-spin {
+    to { transform: rotate(360deg); }
 }
 
 .player-item .name {
@@ -291,6 +347,33 @@ button:disabled {
 .player-item.empty .name {
     font-weight: 500;
     color: #64748b;
+    animation: waiting-pulse 1.5s ease-in-out infinite;
+}
+
+.player-item.empty .name .waiting-dots {
+    display: inline;
+}
+
+.player-item.empty .name .waiting-dots span {
+    animation: dot-blink 1.4s ease-in-out infinite both;
+}
+
+.player-item.empty .name .waiting-dots span:nth-child(2) {
+    animation-delay: 0.2s;
+}
+
+.player-item.empty .name .waiting-dots span:nth-child(3) {
+    animation-delay: 0.4s;
+}
+
+@keyframes waiting-pulse {
+    0%, 100% { opacity: 0.6; }
+    50% { opacity: 1; }
+}
+
+@keyframes dot-blink {
+    0%, 80%, 100% { opacity: 0.3; }
+    40% { opacity: 1; }
 }
 
 .player-item .badge {

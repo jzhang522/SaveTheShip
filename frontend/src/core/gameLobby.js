@@ -60,8 +60,14 @@ function updateLobbyPlayerList(players, myName) {
         const li = document.createElement("li");
         li.className = "player-item empty";
         li.innerHTML = `
-            <span class="avatar">?</span>
-            <span class="name">Waiting for player...</span>
+            <span class="avatar avatar-waiting">
+                <svg class="avatar-progress" viewBox="0 0 36 36">
+                    <circle class="avatar-progress-bg" cx="18" cy="18" r="16"/>
+                    <circle class="avatar-progress-fill" cx="18" cy="18" r="16"/>
+                </svg>
+                <span class="avatar-icon">?</span>
+            </span>
+            <span class="name">Waiting for player<span class="waiting-dots"><span>.</span><span>.</span><span>.</span></span></span>
         `;
         playerList.appendChild(li);
     }
@@ -97,8 +103,8 @@ function connectWebSocket(playerName, data) {
                 const lobbyInfo = document.getElementById("lobbyInfo");
                 if (lobbyInfo) {
                     lobbyInfo.innerHTML = `
-                        <strong>Lobby ID</strong> <span>${msg.gameId || msg.lobbyId || "—"}</span> &nbsp;·&nbsp;
-                        <strong>Your ID</strong> <span>${msg.playerId || "—"}</span>
+                        <div><strong>Lobby ID</strong> <span class="lobby-value lobby-value-truncate" title="${escapeHtml(String(msg.gameId || msg.lobbyId || ""))}">${msg.gameId || msg.lobbyId || "—"}</span></div>
+                        <div><strong>Player ID</strong> <span class="lobby-value lobby-value-truncate" title="${escapeHtml(String(msg.playerId || ""))}">${msg.playerId || "—"}</span></div>
                     `;
                 }
             }
@@ -159,10 +165,10 @@ function showLobbyView(playerName, data) {
     const lobbyView = document.getElementById("lobbyView");
     lobbyView.classList.add("visible");
 
-    const serverDisplay = data.serverEndpoint ?? (data.serverIp && data.port != null ? `${data.serverIp}:${data.port}` : "—");
+    const playerIdDisplay = data?.playerId ?? data?.PlayerId ?? "—";
     document.getElementById("lobbyInfo").innerHTML = `
-                    <strong>Lobby ID</strong> <span>${data.lobbyId || "—"}</span> &nbsp;·&nbsp;
-                    <strong>Server</strong> <span>${serverDisplay}</span>
+                    <div><strong>Lobby ID</strong> <span class="lobby-value lobby-value-truncate" title="${escapeHtml(String(data.lobbyId ?? data?.LobbyId ?? ""))}">${data.lobbyId ?? data?.LobbyId ?? "—"}</span></div>
+                    <div><strong>Player ID</strong> <span class="lobby-value lobby-value-truncate" title="${escapeHtml(String(playerIdDisplay))}">${playerIdDisplay}</span></div>
                 `;
 
     const playerList = document.getElementById("playerList");
@@ -196,8 +202,14 @@ function showLobbyView(playerName, data) {
         const li = document.createElement("li");
         li.className = "player-item empty";
         li.innerHTML = `
-                        <span class="avatar">?</span>
-                        <span class="name">Waiting for player...</span>
+                        <span class="avatar avatar-waiting">
+                            <svg class="avatar-progress" viewBox="0 0 36 36">
+                                <circle class="avatar-progress-bg" cx="18" cy="18" r="16"/>
+                                <circle class="avatar-progress-fill" cx="18" cy="18" r="16"/>
+                            </svg>
+                            <span class="avatar-icon">?</span>
+                        </span>
+                        <span class="name">Waiting for player<span class="waiting-dots"><span>.</span><span>.</span><span>.</span></span></span>
                     `;
         playerList.appendChild(li);
     }
