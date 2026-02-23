@@ -13,7 +13,7 @@ export function createRenderer() {
 
   renderer.setSize(window.innerWidth - 320, window.innerHeight - 100);
   renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.shadowMap.type = THREE.PCFShadowMap;
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 
   container.appendChild(renderer.domElement);

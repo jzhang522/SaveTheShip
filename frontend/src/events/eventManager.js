@@ -18,11 +18,35 @@ export class EventManager {
       'w', 'a', 's', 'd', ' '
     ];
 
+    // Helper: cancel an active fix
+    function cancelFixing() {
+      const fixingPanelId = game.character._fixingPanelId;
+      game.character.isFixing = false;
+      game.character._fixingPanelId = null;
+      if (game.character._fixSafetyTimeout) {
+        clearTimeout(game.character._fixSafetyTimeout);
+        game.character._fixSafetyTimeout = null;
+      }
+      const lp = game.players.get(game.playerId);
+      if (lp?._model) {
+        lp._model.isFixing = false;
+        lp._model.playAnimation('Idle');
+      }
+      if (game.ws?.readyState === WebSocket.OPEN && fixingPanelId != null) {
+        game.ws.send(JSON.stringify({ type: 'stopFix', panelId: fixingPanelId }));
+      }
+    }
+
     window.addEventListener('keydown', (e) => {
       game.inputState.keys[e.key.toLowerCase()] = true;
 
       if (movementKeys.includes(e.key.toLowerCase())) {
         e.preventDefault();
+        // Cancel fixing if player tries to move or jump
+        if (game.character.isFixing) {
+          cancelFixing();
+          return;
+        }
       }
 
       // Animation debug keys
@@ -35,14 +59,69 @@ export class EventManager {
         if (localPlayer?._model) localPlayer._model.playAnimation('Run');
       }
 
+      // Attack: press Q to kick a player in front of you
+      if ((e.key === 'q' || e.key === 'Q') && !e.repeat) {
+        if (game.character.isDead) return;
+        if (game.character.isAttacking || game.character.isFixing) return;
+
+        // Lock movement
+        game.character.isAttacking = true;
+
+        // Play Kick animation on local model
+        const localPlayer = game.players.get(game.playerId);
+        if (localPlayer?._model) {
+          localPlayer._model.isAttacking = true;
+          localPlayer._model.playAnimation('Kick');
+        }
+
+        // Send attack to server with position and yaw — server does hit detection
+        const attackerPos = game.character.getPosition();
+        const attackerYaw = game.character.getYaw();
+        if (game.ws?.readyState === WebSocket.OPEN) {
+          game.ws.send(JSON.stringify({
+            type: 'playerAttack',
+            x: attackerPos.x,
+            y: attackerPos.y,
+            z: attackerPos.z,
+            yaw: attackerYaw
+          }));
+        }
+
+        // After kick animation duration, unlock movement
+        setTimeout(() => {
+          game.character.isAttacking = false;
+          if (localPlayer?._model) {
+            localPlayer._model.isAttacking = false;
+            localPlayer._model.playAnimation('Idle');
+          }
+        }, 1000);
+      }
+
+      // Toggle spotlight: press E
+      if ((e.key === 'e' || e.key === 'E') && !e.repeat) {
+        if (game.character.isDead) return;
+        const spotlightOn = game.scene3d.toggleSpotlight();
+        const localPlayer = game.players.get(game.playerId);
+        if (localPlayer?._model) {
+          localPlayer._model.spotlightOn = spotlightOn;
+        }
+        if (game.ws?.readyState === WebSocket.OPEN) {
+          game.ws.send(JSON.stringify({ type: 'toggleSpotlight', spotlightOn }));
+        }
+      }
+
       // Fix interaction: press F near a broken control panel
       if ((e.key === 'f' || e.key === 'F') && !e.repeat) {
+        // Dead players cannot fix panels
+        if (game.character.isDead) return;
+        if (game.ws?.readyState !== WebSocket.OPEN) return;
         if (!game.character.isFixing) {
           const playerPos = game.character.getPosition();
-          const panel = ControlPanel.getNearestFixablePanel(playerPos, 11);
+          const panel = ControlPanel.getNearestFixablePanel(playerPos, 12);
           if (panel) {
             // Lock movement
             game.character.isFixing = true;
+            game.character._fixingPanelId = panel.id;
 
             // Face the control panel
             const panelPos = panel.model.position;
@@ -59,25 +138,22 @@ export class EventManager {
               localPlayer._model.playAnimation('Fix');
             }
 
-            // Notify server
-            if (game.ws?.readyState === WebSocket.OPEN) {
-              game.ws.send(JSON.stringify({ type: 'startFix', panelId: panel.id }));
-            }
+            // Notify server — server will increase HP by 1/sec and send fixingStopped when done
+            game.ws.send(JSON.stringify({ type: 'startFix', panelId: panel.id }));
 
-            // After 5 seconds, complete the fix
-            const fixingPanelId = panel.id;
-            setTimeout(() => {
-              game.character.isFixing = false;
-              if (localPlayer?._model) {
-                localPlayer._model.isFixing = false;
-                localPlayer._model.playAnimation('Idle');
+            // Safety timeout: if server never responds, unlock after 20s
+            game.character._fixSafetyTimeout = setTimeout(() => {
+              if (game.character.isFixing) {
+                game.character.isFixing = false;
+                game.character._fixingPanelId = null;
+                const lp = game.players.get(game.playerId);
+                if (lp?._model) {
+                  lp._model.isFixing = false;
+                  lp._model.playAnimation('Idle');
+                }
+                console.warn('Fix safety timeout — forcibly unlocked character');
               }
-
-              // Tell server the fix is complete
-              if (game.ws?.readyState === WebSocket.OPEN) {
-                game.ws.send(JSON.stringify({ type: 'fixComplete', panelId: fixingPanelId }));
-              }
-            }, 5000);
+            }, 20000);
           }
         }
       }
@@ -91,7 +167,7 @@ export class EventManager {
   static setupMouse(game) {
     document.addEventListener('mousemove', (e) => {
       if (!game.inputState.isPointerLocked) return;
-      if (game.character.isFixing) return;
+      if (game.character.isFixing || game.character.isAttacking) return;
 
       game.character.yaw -= e.movementX * game.fpsCamera.mouseSensitivity;
       game.fpsCamera.pitch -= e.movementY * game.fpsCamera.mouseSensitivity;

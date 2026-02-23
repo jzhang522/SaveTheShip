@@ -22,6 +22,19 @@ const LOBBY_COUNTDOWN_SECONDS = 1; // TODO: Change to 10
 
 const TOTAL_PANELS = 8;
 const PANELS_NEED_FIX = 6;
+const PANEL_MAX_HP = 15;
+
+// Panel positions (must match frontend controlPanel.js)
+const PANEL_POSITIONS = [
+  { id: 1, x: -26.5, y: 53.5, z: -1120.5 },
+  { id: 2, x: 160, y: 21, z: -727 },
+  { id: 3, x: 0, y: -4, z: -120 },
+  { id: 4, x: 156, y: -8, z: 136 },
+  { id: 5, x: -143, y: -8, z: 118 },
+  { id: 6, x: 0, y: -9, z: 371 },
+  { id: 7, x: 0, y: -8, z: 753 },
+  { id: 8, x: 0, y: 7, z: 1363 },
+];
 
 // HTTP server
 const server = http.createServer();
@@ -157,7 +170,8 @@ function findOrCreateGameByLobbyId(lobbyId, playerId, playerName) {
   // Fallback: find any waiting game with space (only if no lobbyId - avoid splitting same-lobby players)
   if (!trimmedLobbyId) {
     for (let [gameId, game] of games.entries()) {
-      if (game.players.size < MAX_PLAYERS_PER_GAME && game.state === 'waiting') {
+      // if (game.players.size < MAX_PLAYERS_PER_GAME && game.state === 'waiting') {
+      if (game.players.size < MAX_PLAYERS_PER_GAME) {
         return gameId;
       }
     }
@@ -170,10 +184,17 @@ function findOrCreateGameByLobbyId(lobbyId, playerId, playerName) {
     players: new Map(),
     state: 'waiting',
     panelsNeedFix: [],
+    panelHP: {},
+    fixingIntervals: {},
     countdownTimer: null,
     createdAt: Date.now()
   };
-  
+
+  // Initialize all panels with max HP
+  for (let i = 1; i <= TOTAL_PANELS; i++) {
+    game.panelHP[i] = PANEL_MAX_HP;
+  }
+
   games.set(gameId, game);
   return gameId;
 }
@@ -211,31 +232,67 @@ function selectPanelsNeedFix() {
   return allIds.slice(0, PANELS_NEED_FIX);
 }
 
-// Start the game: select broken panels and notify all players
+// Start the game: select broken panels, set their HP to 0, and notify all players
 function startGame(gameId) {
   const game = games.get(gameId);
   if (!game || game.state === 'playing') return;
 
   game.state = 'playing';
-  game.panelsNeedFix = selectPanelsNeedFix();
+  const brokenPanelIds = selectPanelsNeedFix();
+
+  // Set HP to 0 for broken panels, max for others
+  for (let i = 1; i <= TOTAL_PANELS; i++) {
+    game.panelHP[i] = brokenPanelIds.includes(i) ? 0 : PANEL_MAX_HP;
+  }
+  game.panelsNeedFix = brokenPanelIds;
 
   broadcastToGame(gameId, {
     type: 'panelsNeedFix',
-    panelIds: game.panelsNeedFix
+    panelIds: game.panelsNeedFix,
+    panelHP: game.panelHP
   });
 
   console.log(`Game ${gameId} started — panels needing fix: [${game.panelsNeedFix.join(', ')}]`);
+}
+
+// Get all panel IDs with HP < max
+function getPanelsNeedFix(game) {
+  const ids = [];
+  for (let i = 1; i <= TOTAL_PANELS; i++) {
+    if (game.panelHP[i] < PANEL_MAX_HP) ids.push(i);
+  }
+  return ids;
+}
+
+// Clean up fixing intervals when a player leaves/disconnects
+function cleanupPlayerFixing(game, leavingPlayerId, gameId) {
+  if (!game.fixingIntervals) return;
+  for (const [panelId, fixInfo] of Object.entries(game.fixingIntervals)) {
+    if (fixInfo.playerId === leavingPlayerId) {
+      clearInterval(fixInfo.interval);
+      delete game.fixingIntervals[panelId];
+      broadcastToGame(gameId, {
+        type: 'fixingStopped',
+        panelId: parseInt(panelId),
+        playerId: leavingPlayerId
+      });
+    }
+  }
 }
 
 // Broadcast to all players in a game
 function broadcastToGame(gameId, message) {
   const game = games.get(gameId);
   if (!game) return;
-  
+
   const data = JSON.stringify(message);
   game.players.forEach(player => {
-    if (player.ws && player.ws.readyState === WebSocket.OPEN) {
-      player.ws.send(data);
+    try {
+      if (player.ws && player.ws.readyState === WebSocket.OPEN) {
+        player.ws.send(data);
+      }
+    } catch (err) {
+      console.error(`broadcastToGame send error for player ${player.id}:`, err.message);
     }
   });
 }
@@ -244,7 +301,7 @@ function broadcastToGame(gameId, message) {
 function getGameState(gameId) {
   const game = games.get(gameId);
   if (!game) return null;
-  
+
   const playersList = Array.from(game.players.values()).map(p => ({
     id: p.id,
     name: p.name,
@@ -253,9 +310,11 @@ function getGameState(gameId) {
     z: p.z,
     rotationY: p.rotationY,
     role: p.role || null,
-    color: p.color
+    color: p.color,
+    spotlightOn: p.spotlightOn !== undefined ? p.spotlightOn : true,
+    isDead: p.isDead || false
   }));
-  
+
   return {
     type: 'gameState',
     gameId,
@@ -274,7 +333,7 @@ wss.on('connection', (ws) => {
   ws.on('message', async (data) => {
     try {
       const message = JSON.parse(data);
-      
+
       // Player joins game (lobbyId/playerId from Lambda, or generated)
       if (message.type === 'join') {
         const lobbyId = typeof message.lobbyId === 'string' ? message.lobbyId.trim() : message.lobbyId;
@@ -303,7 +362,7 @@ wss.on('connection', (ws) => {
         if (game.state === 'in-progress') {
           roles = await loadRolesFromDB(gameId);
         }
-        
+
         const player = {
           id: playerId,
           name: playerName,
@@ -314,10 +373,12 @@ wss.on('connection', (ws) => {
           rotationY: 0,
           color: color,
           role: roles[playerId] || null,
+          spotlightOn: true,
+          isDead: false,
           joinedAt: Date.now()
         };
 
-        
+
         game.players.set(playerId, player);
         players.set(playerId, { gameId, ws });
 
@@ -327,7 +388,7 @@ wss.on('connection', (ws) => {
           clearTimeout(global.pendingDynamoRemovals.get(removalKey));
           global.pendingDynamoRemovals.delete(removalKey);
         }
-        
+
         // Send welcome message
         ws.send(JSON.stringify({
           type: 'welcomeMessage',
@@ -338,7 +399,7 @@ wss.on('connection', (ws) => {
           role: player.role,
           color
         }));
-        
+
         // Update all players in game
         broadcastToGame(gameId, getGameState(gameId));
 
@@ -351,19 +412,20 @@ wss.on('connection', (ws) => {
         if (game.state === 'playing' && game.panelsNeedFix.length > 0) {
           ws.send(JSON.stringify({
             type: 'panelsNeedFix',
-            panelIds: game.panelsNeedFix
+            panelIds: game.panelsNeedFix,
+            panelHP: game.panelHP
           }));
         }
       }
-      
+
       // Player moved
       if (message.type === 'move' && playerId && gameId) {
         const game = games.get(gameId);
         if (!game) return;
-        
+
         const player = game.players.get(playerId);
         if (!player) return;
-        
+
         // Update position and rotation
         player.x = message.x;
         player.y = message.y;
@@ -371,34 +433,225 @@ wss.on('connection', (ws) => {
         if (message.rotationY !== undefined) {
           player.rotationY = message.rotationY;
         }
-        
+
         // Broadcast updated game state
         broadcastToGame(gameId, getGameState(gameId));
       }
 
-      // Player started fixing a panel
+      // Player toggled their spotlight
+      if (message.type === 'toggleSpotlight' && playerId && gameId) {
+        const game = games.get(gameId);
+        if (game) {
+          const player = game.players.get(playerId);
+          if (player) {
+            player.spotlightOn = message.spotlightOn;
+          }
+          // Broadcast to all other players in the game
+          broadcastToGame(gameId, {
+            type: 'spotlightToggle',
+            playerId: playerId,
+            spotlightOn: message.spotlightOn
+          });
+        }
+      }
+
+      // Player attacked
+      if (message.type === 'playerAttack' && playerId && gameId) {
+        const game = games.get(gameId);
+        if (game) {
+          // Broadcast kick animation to all players
+          broadcastToGame(gameId, {
+            type: 'playerAttacking',
+            playerId: playerId
+          });
+
+          // Server-side hit detection using stored positions
+          const attackRange = 15;
+          const attackAngle = Math.PI / 2; // 90-degree cone
+          const ax = message.x;
+          const az = message.z;
+          const yaw = message.yaw;
+          const fwdX = Math.sin(yaw);
+          const fwdZ = Math.cos(yaw);
+
+          let closestId = null;
+          let closestDist = attackRange;
+
+          for (const [pid, p] of game.players.entries()) {
+            if (pid === playerId) continue; // skip self
+            if (p.isDead) continue; // skip dead
+            const dx = p.x - ax;
+            const dz = p.z - az;
+            const dist = Math.sqrt(dx * dx + dz * dz);
+            if (dist > attackRange || dist < 0.1) continue;
+
+            const dirX = dx / dist;
+            const dirZ = dz / dist;
+            const dot = fwdX * dirX + fwdZ * dirZ;
+            const angle = Math.acos(Math.max(-1, Math.min(1, dot)));
+            if (angle < attackAngle && dist < closestDist) {
+              closestDist = dist;
+              closestId = pid;
+            }
+          }
+
+          if (closestId) {
+            const targetPlayer = game.players.get(closestId);
+            if (targetPlayer && targetPlayer.ws?.readyState === WebSocket.OPEN) {
+              targetPlayer.ws.send(JSON.stringify({
+                type: 'playerHit',
+                attackerId: playerId,
+                targetId: closestId
+              }));
+            }
+          }
+
+          // Panel attack detection: check if any panel is in attack range
+          const panelAttackRange = 15;
+          for (const panelPos of PANEL_POSITIONS) {
+            const dx = panelPos.x - ax;
+            const dz = panelPos.z - az;
+            const dist = Math.sqrt(dx * dx + dz * dz);
+            if (dist > panelAttackRange || dist < 0.1) continue;
+
+            const dirX = dx / dist;
+            const dirZ = dz / dist;
+            const dot = fwdX * dirX + fwdZ * dirZ;
+            const angle = Math.acos(Math.max(-1, Math.min(1, dot)));
+            if (angle < attackAngle) {
+              const pid = panelPos.id;
+              if (game.panelHP[pid] > 0) {
+                game.panelHP[pid] = Math.max(0, game.panelHP[pid] - 1);
+                game.panelsNeedFix = getPanelsNeedFix(game);
+
+                broadcastToGame(gameId, {
+                  type: 'panelHpUpdate',
+                  panelId: pid,
+                  hp: game.panelHP[pid]
+                });
+
+                console.log(`Panel ${pid} attacked by ${playerId}! HP: ${game.panelHP[pid]}`);
+              }
+            }
+          }
+
+          console.log(`Player ${playerId} attacked${closestId ? ` hit ${closestId} (dist=${closestDist.toFixed(1)})` : ' (no player target)'}`);
+        }
+      }
+
+      // Player died
+      if (message.type === 'playerDied' && playerId && gameId) {
+        const game = games.get(gameId);
+        if (game) {
+          const player = game.players.get(playerId);
+          if (player) {
+            player.isDead = true;
+            player.spotlightOn = false;
+          }
+          broadcastToGame(gameId, getGameState(gameId));
+          console.log(`Player ${playerId} has died`);
+        }
+      }
+
+      // Player started fixing a panel — server manages HP increase via interval
       if (message.type === 'startFix' && playerId && gameId) {
+        const game = games.get(gameId);
+        if (!game) return;
+        const panelId = message.panelId;
+
+        // Validate panelId
+        if (typeof panelId !== 'number' || panelId < 1 || panelId > TOTAL_PANELS) {
+          ws.send(JSON.stringify({ type: 'fixingStopped', panelId, playerId }));
+          return;
+        }
+
+        // Don't start if panel already at max HP — tell client to stop fixing
+        if (game.panelHP[panelId] >= PANEL_MAX_HP) {
+          ws.send(JSON.stringify({ type: 'fixingStopped', panelId, playerId }));
+          return;
+        }
+
+        // Don't start if someone is already fixing this panel — tell client to stop
+        if (game.fixingIntervals[panelId]) {
+          ws.send(JSON.stringify({ type: 'fixingStopped', panelId, playerId }));
+          return;
+        }
+
+        // Broadcast fixing animation to all players
         broadcastToGame(gameId, {
           type: 'playerFixing',
           playerId: playerId,
-          panelId: message.panelId
+          panelId: panelId
         });
-        console.log(`Player ${playerId} started fixing panel ${message.panelId}`);
+
+        // Capture fixPlayerId in closure scope to avoid reference issues
+        const fixPlayerId = playerId;
+        const fixGameId = gameId;
+
+        // Start HP increase: +1 every second
+        game.fixingIntervals[panelId] = {
+          playerId: fixPlayerId,
+          interval: setInterval(() => {
+            try {
+              game.panelHP[panelId] = Math.min(PANEL_MAX_HP, (game.panelHP[panelId] || 0) + 1);
+
+              // Broadcast HP update
+              broadcastToGame(fixGameId, {
+                type: 'panelHpUpdate',
+                panelId: panelId,
+                hp: game.panelHP[panelId]
+              });
+
+              // If fully repaired, stop fixing
+              if (game.panelHP[panelId] >= PANEL_MAX_HP) {
+                if (game.fixingIntervals[panelId]) {
+                  clearInterval(game.fixingIntervals[panelId].interval);
+                  delete game.fixingIntervals[panelId];
+                }
+
+                game.panelsNeedFix = getPanelsNeedFix(game);
+
+                broadcastToGame(fixGameId, {
+                  type: 'fixingStopped',
+                  panelId: panelId,
+                  playerId: fixPlayerId
+                });
+
+                console.log(`Panel ${panelId} fully fixed by ${fixPlayerId}. HP: ${game.panelHP[panelId]}`);
+              }
+            } catch (err) {
+              console.error(`Fix interval error for panel ${panelId}:`, err);
+              // On error, clean up and broadcast fixingStopped so players aren't stuck
+              if (game.fixingIntervals[panelId]) {
+                clearInterval(game.fixingIntervals[panelId].interval);
+                delete game.fixingIntervals[panelId];
+              }
+              broadcastToGame(fixGameId, {
+                type: 'fixingStopped',
+                panelId: panelId,
+                playerId: fixPlayerId
+              });
+            }
+          }, 1000)
+        };
+
+        console.log(`Player ${playerId} started fixing panel ${panelId} (HP: ${game.panelHP[panelId]})`);
       }
 
-      // Player finished fixing a panel
-      if (message.type === 'fixComplete' && playerId && gameId) {
+      // Player requested to stop fixing (disconnect, hit, etc.)
+      if (message.type === 'stopFix' && playerId && gameId) {
         const game = games.get(gameId);
-        if (game) {
-          const idx = game.panelsNeedFix.indexOf(message.panelId);
-          if (idx !== -1) {
-            game.panelsNeedFix.splice(idx, 1);
-          }
+        if (!game) return;
+        const panelId = message.panelId;
+        if (game.fixingIntervals[panelId] && game.fixingIntervals[panelId].playerId === playerId) {
+          clearInterval(game.fixingIntervals[panelId].interval);
+          delete game.fixingIntervals[panelId];
           broadcastToGame(gameId, {
-            type: 'panelFixed',
-            panelId: message.panelId
+            type: 'fixingStopped',
+            panelId: panelId,
+            playerId: playerId
           });
-          console.log(`Panel ${message.panelId} fixed by ${playerId}. Remaining: [${game.panelsNeedFix.join(', ')}]`);
+          console.log(`Player ${playerId} stopped fixing panel ${panelId} (HP: ${game.panelHP[panelId]})`);
         }
       }
 
@@ -406,6 +659,9 @@ wss.on('connection', (ws) => {
       if (message.type === 'leave' && playerId && gameId) {
         const game = games.get(gameId);
         if (game) {
+          // Clear any fixing intervals for this player
+          cleanupPlayerFixing(game, playerId, gameId);
+
           game.players.delete(playerId);
           removePlayerFromDynamoDBLobby(gameId, playerId).catch((err) =>
             console.error("[Lobby] DynamoDB cleanup error:", err)
@@ -415,6 +671,11 @@ wss.on('connection', (ws) => {
             game.countdownTimer = null;
           }
           if (game.players.size === 0) {
+            // Clean up ALL fixing intervals before deleting game
+            for (const [panelId, fixInfo] of Object.entries(game.fixingIntervals)) {
+              clearInterval(fixInfo.interval);
+            }
+            game.fixingIntervals = {};
             games.delete(gameId);
           } else {
             broadcastToGame(gameId, getGameState(gameId));
@@ -430,13 +691,16 @@ wss.on('connection', (ws) => {
       console.error('Message handling error:', error);
     }
   });
-  
+
   ws.on('close', () => {
     if (playerId && gameId) {
       const game = games.get(gameId);
       const closedPlayerId = playerId;
       const closedGameId = gameId;
       if (game) {
+        // Clear any fixing intervals for this player
+        cleanupPlayerFixing(game, playerId, closedGameId);
+
         game.players.delete(playerId);
 
         // Delay DynamoDB removal so accidental nav to /game can reconnect within grace period
@@ -459,17 +723,22 @@ wss.on('connection', (ws) => {
 
         // Remove empty games
         if (game.players.size === 0) {
+          // Clean up ALL fixing intervals before deleting game
+          for (const [panelId, fixInfo] of Object.entries(game.fixingIntervals)) {
+            clearInterval(fixInfo.interval);
+          }
+          game.fixingIntervals = {};
           games.delete(gameId);
         } else {
           // Notify remaining players
           broadcastToGame(gameId, getGameState(gameId));
         }
       }
-      
+
       players.delete(playerId);
     }
   });
-  
+
   ws.on('error', (error) => {
     console.error('WebSocket error:', error);
   });

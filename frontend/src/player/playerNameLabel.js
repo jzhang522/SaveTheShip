@@ -11,16 +11,17 @@ export class PlayerNameLabel {
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
     ctx.fillStyle = '#ffffff';
-    ctx.font = 'Bold 48px Arial';
+    ctx.font = 'Bold 2.5rem Arial';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText(name.substring(0, 12), canvas.width / 2, canvas.height / 2);
 
     const texture = new THREE.CanvasTexture(canvas);
-    const geometry = new THREE.PlaneGeometry(2, 0.5);
-    const material = new THREE.MeshBasicMaterial({ map: texture, transparent: true });
-    const label = new THREE.Mesh(geometry, material);
-    label.position.y = 16;
-    group.add(label);
+    const material = new THREE.SpriteMaterial({ map: texture, transparent: true });
+    const sprite = new THREE.Sprite(material);
+    sprite.scale.set(5, 1.5, 1.5);
+    sprite.position.y = 16;
+    group.add(sprite);
+    return sprite;
   }
 }

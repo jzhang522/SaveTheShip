@@ -3,6 +3,8 @@ import { FBXLoader } from '../loaders/fbxLoader.js';
 
 const DEFAULT_LIGHT_COLOR = 0x948d81;
 const NEED_FIX_LIGHT_COLOR = 0xff0000;
+const FIXED_LIGHT_COLOR = 0x00ff00;
+const PANEL_MAX_HP = 15;
 
 export class ControlPanel {
   // Shared panel registry: Map<id, { id, model, light, needFix }>
@@ -27,19 +29,24 @@ export class ControlPanel {
     let loaded = 0;
     const loader = new FBXLoader();
 
-    panelConfigs.forEach((panel) => {
-      loader.load('/ControlPanel.fbx', (model) => {
+    // Load the FBX once, then clone for each panel placement
+    loader.load('/ControlPanel.fbx', (baseModel) => {
+      // Create a shared material for all panel meshes
+      const sharedMaterial = new THREE.MeshStandardMaterial({
+        map: CPanelTexture,
+        metalness: 0,
+        roughness: 0.4,
+      });
+
+      panelConfigs.forEach((panel) => {
+        const model = baseModel.clone();
         model.scale.set(0.06, 0.06, 0.06);
         model.position.set(panel.x, panel.y, panel.z);
         model.rotation.y = Math.PI + THREE.MathUtils.degToRad(panel.rotY);
 
         model.traverse((node) => {
           if (node.isMesh) {
-            node.material = new THREE.MeshStandardMaterial({
-              map: CPanelTexture,
-              metalness: 0,
-              roughness: 0.4,
-            });
+            node.material = sharedMaterial;
             node.castShadow = true;
             node.receiveShadow = true;
           }
@@ -53,39 +60,53 @@ export class ControlPanel {
         panelLight.castShadow = false;
         scene.add(panelLight);
 
-        // Register panel with id and needFix state
+        // Register panel with id, needFix state, and HP
         ControlPanel.panels.set(panel.id, {
           id: panel.id,
           model,
           light: panelLight,
           needFix: false,
+          hp: PANEL_MAX_HP,
         });
-
-        loaded++;
-        if (loaded === panelConfigs.length && onCPanelLoaded) {
-          onCPanelLoaded();
-        }
       });
+
+      if (onCPanelLoaded) {
+        onCPanelLoaded();
+      }
     });
   }
 
   /**
-   * Mark specific panels as needing repair and turn their lights red.
+   * Mark specific panels as needing repair and set their HP.
    * @param {number[]} panelIds - Array of panel IDs that need fixing.
+   * @param {Object} panelHP - Optional map of panelId → hp values.
    */
-  static setNeedFix(panelIds) {
-    // Reset all panels first
-    for (const panel of ControlPanel.panels.values()) {
-      panel.needFix = false;
-      panel.light.color.setHex(DEFAULT_LIGHT_COLOR);
-    }
-    // Mark the specified panels
-    for (const id of panelIds) {
-      const panel = ControlPanel.panels.get(id);
-      if (panel) {
-        panel.needFix = true;
-        panel.light.color.setHex(NEED_FIX_LIGHT_COLOR);
+  static setNeedFix(panelIds, panelHP = {}) {
+    for (const [id, panel] of ControlPanel.panels) {
+      if (panelHP[id] !== undefined) {
+        panel.hp = panelHP[id];
+      } else if (panelIds.includes(id)) {
+        panel.hp = 0;
+      } else {
+        panel.hp = PANEL_MAX_HP;
       }
+      panel.needFix = panel.hp < PANEL_MAX_HP;
+      panel.light.color.setHex(panel.needFix ? NEED_FIX_LIGHT_COLOR : FIXED_LIGHT_COLOR);
+    }
+  }
+
+  /**
+   * Update a single panel's HP and needFix/light state.
+   * @param {number} panelId
+   * @param {number} hp
+   */
+  static updatePanelHp(panelId, hp) {
+    const panel = ControlPanel.panels.get(panelId);
+    if (panel) {
+      panel.hp = hp;
+      panel.needFix = hp < PANEL_MAX_HP;
+      panel.light.color.setHex(panel.needFix ? NEED_FIX_LIGHT_COLOR : FIXED_LIGHT_COLOR);
+      console.log(`Panel ${panelId} HP: ${hp}/${PANEL_MAX_HP} needFix: ${panel.needFix}`);
     }
   }
 
@@ -102,15 +123,15 @@ export class ControlPanel {
    * @param {number} maxDistance
    * @returns {object|null} The nearest fixable panel entry, or null.
    */
-  static getNearestFixablePanel(playerPosition, maxDistance = 11) {
+  static getNearestFixablePanel(playerPosition, maxDistance = 12) {
     let nearest = null;
-    let nearestDist = maxDistance;
+    let nearestDistSq = maxDistance * maxDistance;
     for (const panel of ControlPanel.panels.values()) {
-      if (!panel.needFix) continue;
+      if (panel.hp >= PANEL_MAX_HP) continue;
       const panelPos = panel.model.position;
-      const dist = playerPosition.distanceTo(panelPos);
-      if (dist < nearestDist) {
-        nearestDist = dist;
+      const distSq = playerPosition.distanceToSquared(panelPos);
+      if (distSq < nearestDistSq) {
+        nearestDistSq = distSq;
         nearest = panel;
       }
     }
@@ -124,8 +145,9 @@ export class ControlPanel {
   static fixPanel(panelId) {
     const panel = ControlPanel.panels.get(panelId);
     if (panel) {
+      panel.hp = PANEL_MAX_HP;
       panel.needFix = false;
-      panel.light.color.setHex(DEFAULT_LIGHT_COLOR);
+      panel.light.color.setHex(FIXED_LIGHT_COLOR);
     }
   }
 }
