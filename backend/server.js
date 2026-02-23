@@ -1,3 +1,4 @@
+require('dotenv').config();
 const WebSocket = require('ws');
 const http = require('http');
 const { DynamoDBClient } = require("@aws-sdk/client-dynamodb");
