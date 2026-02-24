@@ -15,6 +15,7 @@ const ddb = DynamoDBDocumentClient.from(client);
 const TABLE_NAME = "SaveTheShipGameLobbies";
 const GSI_NAME = "status-playerCount-index";
 const MAX_PLAYERS = 5;
+const MIN_PLAYERS = 2;
 const SERVER_ENDPOINT = "????????????????????????????????????????"; // TODO: Change to the actual server endpoint
 
 export const handler = async (event) => {
@@ -301,6 +302,15 @@ async function startGame(lobbyId, secret) {
         return response(200, { message: "Game already started", lobbyId });
     }
 
+    if (lobby.status !== "full") {
+        return response(400, { message: "Lobby not ready to start", status: lobby.status });
+    }
+
+    const playerCount = lobby.playerCount ?? 0;
+    if (playerCount < MIN_PLAYERS) {
+        return response(400, { message: `Minimum ${MIN_PLAYERS} players required`, playerCount });
+    }
+
     // Get all players
     const playersQuery = await ddb.send(new QueryCommand({
         TableName: TABLE_NAME,
@@ -310,7 +320,10 @@ async function startGame(lobbyId, secret) {
             ":playerPrefix": "PLAYER#"
         }
     }));
-    const players = playersQuery.Items;
+    const players = playersQuery.Items ?? [];
+    if (players.length < MIN_PLAYERS) {
+        return response(400, { message: `Minimum ${MIN_PLAYERS} players required`, actualCount: players.length });
+    }
 
     // Shuffle and assign sabotage role
     const shuffled = players.sort(() => 0.5 - Math.random());
