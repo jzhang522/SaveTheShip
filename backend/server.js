@@ -18,8 +18,8 @@ const GAME_WIDTH = 1400;
 const GAME_HEIGHT = 800;
 const PLAYER_SIZE = 20;
 const MAX_PLAYERS_PER_GAME = 5;
-const MIN_PLAYERS_PER_GAME = 1; // TODO: Change to 2
-const LOBBY_COUNTDOWN_SECONDS = 1; // TODO: Change to 10
+const MIN_PLAYERS_PER_GAME = 2; // TODO: Change to 2
+const LOBBY_COUNTDOWN_SECONDS = 3; // TODO: Change to 10
 
 const TOTAL_PANELS = 8;
 const PANELS_NEED_FIX = 6;
