@@ -1,3 +1,4 @@
+import { randomInt } from "crypto";
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import {
     DynamoDBDocumentClient,
@@ -15,6 +16,7 @@ const ddb = DynamoDBDocumentClient.from(client);
 const TABLE_NAME = "SaveTheShipGameLobbies";
 const GSI_NAME = "status-playerCount-index";
 const MAX_PLAYERS = 5;
+const MIN_PLAYERS = 2;
 const SERVER_ENDPOINT = "????????????????????????????????????????"; // TODO: Change to the actual server endpoint
 
 export const handler = async (event) => {
@@ -40,7 +42,7 @@ export const handler = async (event) => {
             case "leave":
                 return await handleLeave(lobbyId, body.playerId);
             case "start":
-                return await startGame(lobbyId);
+                return await startGame(lobbyId, body.secret);
             case "finish":
                 return await updateStatus(lobbyId, "finished", 300);
             case "expire":
@@ -281,8 +283,13 @@ async function handleLeave(lobbyId, playerId) {
 // -------------------------
 // Start game: assign roles
 // -------------------------
-async function startGame(lobbyId) {
+async function startGame(lobbyId, secret) {
     if (!lobbyId) return response(400, { message: "lobbyId required" });
+
+    const expectedSecret = process.env.START_GAME_SECRET;
+    if (!expectedSecret || secret !== expectedSecret) {
+        return response(403, { message: "Unauthorized" });
+    }
 
     // Get lobby metadata
     const lobbyResult = await ddb.send(new GetCommand({
@@ -291,6 +298,19 @@ async function startGame(lobbyId) {
     }));
     const lobby = lobbyResult.Item;
     if (!lobby) return response(404, { message: "Lobby not found" });
+
+    if (lobby.status === "in-progress") {
+        return response(200, { message: "Game already started", lobbyId });
+    }
+
+    if (lobby.status !== "full") {
+        return response(400, { message: "Lobby not ready to start", status: lobby.status });
+    }
+
+    const playerCount = lobby.playerCount ?? 0;
+    if (playerCount < MIN_PLAYERS) {
+        return response(400, { message: `Minimum ${MIN_PLAYERS} players required`, playerCount });
+    }
 
     // Get all players
     const playersQuery = await ddb.send(new QueryCommand({
@@ -301,10 +321,33 @@ async function startGame(lobbyId) {
             ":playerPrefix": "PLAYER#"
         }
     }));
-    const players = playersQuery.Items;
+    const players = playersQuery.Items ?? [];
+    if (players.length < MIN_PLAYERS) {
+        return response(400, { message: `Minimum ${MIN_PLAYERS} players required`, actualCount: players.length });
+    }
 
-    // Shuffle and assign sabotage role
-    const shuffled = players.sort(() => 0.5 - Math.random());
+    try {
+        await ddb.send(new UpdateCommand({
+            TableName: TABLE_NAME,
+            Key: { PK: lobbyId, SK: "METADATA" },
+            UpdateExpression: "SET #s = :status",
+            ConditionExpression: "#s = :full",
+            ExpressionAttributeNames: { "#s": "status" },
+            ExpressionAttributeValues: { ":status": "in-progress", ":full": "full" }
+        }));
+    } catch (err) {
+        if (err.name === "ConditionalCheckFailedException") {
+            return response(200, { message: "Game already started", lobbyId });
+        }
+        throw err;
+    }
+
+    // Shuffle using Fisher-Yates with crypto randomness
+    const shuffled = [...players];
+    for (let i = shuffled.length - 1; i > 0; i--) {
+        const j = randomInt(0, i + 1);
+        [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+    }
     const sabotagerCount = 1; // adjust as needed
 
     const updatePromises = shuffled.map((player, i) => {
@@ -319,15 +362,6 @@ async function startGame(lobbyId) {
     });
 
     await Promise.all(updatePromises);
-
-    // Update lobby status
-    await ddb.send(new UpdateCommand({
-        TableName: TABLE_NAME,
-        Key: { PK: lobbyId, SK: "METADATA" },
-        UpdateExpression: "SET #s = :status",
-        ExpressionAttributeNames: { "#s": "status" },
-        ExpressionAttributeValues: { ":status": "in-progress" }
-    }));
 
     return response(200, { message: "Game started", lobbyId });
 }

@@ -3,6 +3,18 @@ import { GameStateManager } from './gameStateManager.js';
 import { generateRandomColor } from '../player/animation/playerColorUtils.js';
 import { ControlPanel } from '../scene/controlPanel.js';
 
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+function colorToHex(colorNum) {
+  if (colorNum == null) return '#6b7a9e';
+  const n = typeof colorNum === 'number' ? colorNum : parseInt(String(colorNum).replace('#', ''), 16);
+  return '#' + (n >>> 0).toString(16).padStart(6, '0');
+}
+
 export class MessageHandler {
   static handleMessage(game, message) {
     if (message.type === 'welcomeMessage') {
@@ -24,6 +36,32 @@ export class MessageHandler {
     if (message.type === 'panelFixed') {
       this.handlePanelFixed(game, message);
     }
+
+    if (message.type === 'chat') {
+      this.handleChatMessage(game, message);
+    }
+  }
+
+  static handleChatMessage(game, message) {
+    const container = document.querySelector('.chat-messages');
+    if (!container) return;
+    const isOwn = message.playerId === game.playerId;
+    if (!isOwn) {
+      const chatWindow = document.getElementById('chatWindow');
+      if (chatWindow && !chatWindow.classList.contains('open')) {
+        chatWindow.classList.add('open');
+        chatWindow.setAttribute('aria-hidden', 'false');
+      }
+    }
+    const el = document.createElement('div');
+    el.className = 'chat-message';
+    const color = message.color ?? game.players.get(message.playerId)?.color ?? game.otherPlayers.get(message.playerId)?.color;
+    const accentHex = colorToHex(color);
+    el.style.setProperty('--chat-accent', accentHex);
+    el.innerHTML = `<span class="chat-sender"><span class="chat-sender-dot" style="background-color:${accentHex}"></span>${escapeHtml(message.playerName || message.playerId)}</span><span class="chat-text">${escapeHtml(message.text)}</span>`;
+    if (isOwn) el.classList.add('chat-message-own');
+    container.appendChild(el);
+    container.scrollTop = container.scrollHeight;
   }
 
   static handleWelcomeMessage(game, message) {

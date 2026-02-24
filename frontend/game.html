@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>3D FPS Multiplayer Game</title>
   <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="styles/game.css">
 </head>
 <body>
   <div class="container">
@@ -16,7 +17,19 @@
     </div>
     
     <div class="main-content">
-      <div id="gameContainer"></div>
+      <div id="gameContainer">
+        <button type="button" id="chatToggle" class="chat-toggle-btn" title="Toggle chat (Enter)" aria-label="Toggle chat">💬</button>
+      </div>
+      <aside id="chatWindow" class="chat-window" aria-hidden="true">
+        <div class="chat-header">
+          <h3>Chat</h3>
+          <button type="button" class="chat-close" aria-label="Close chat">×</button>
+        </div>
+        <div class="chat-messages"></div>
+        <div class="chat-input-area">
+          <input type="text" id="chatInput" placeholder="Type a message..." maxlength="500" />
+        </div>
+      </aside>
       
       <div class="ui-panel">
         <div class="info-section">

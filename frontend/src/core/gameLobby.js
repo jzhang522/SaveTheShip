@@ -331,6 +331,30 @@ async function findMatch() {
 
 document.getElementById("findMatchBtn")?.addEventListener("click", findMatch);
 
+document.getElementById("playerName")?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+        e.preventDefault();
+        findMatch();
+    }
+});
+
+document.addEventListener("keydown", (e) => {
+    const matchmakingCard = document.getElementById("matchmakingCard");
+    const playerNameInput = document.getElementById("playerName");
+    if (!matchmakingCard || !playerNameInput) return;
+    if (matchmakingCard.classList.contains("hidden")) return;
+    if (document.activeElement === playerNameInput) return;
+    const isLetter = /^[a-zA-Z]$/.test(e.key);
+    const isShift = e.key === "Shift";
+    if (!isLetter && !isShift) return;
+    e.preventDefault();
+    e.stopPropagation();
+    playerNameInput.focus();
+    if (isLetter) {
+        playerNameInput.value += e.key;
+    }
+});
+
 document.getElementById("leaveLobbyBtn")?.addEventListener("click", async () => {
     await sendLeaveMessage({ keepalive: false });
     if (ws) {

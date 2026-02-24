@@ -1,0 +1,12 @@
+{
+  "body": "{\"action\":\"start\",\"lobbyId\":\"LOBBY#REPLACE-WITH-REAL-LOBBY-ID\",\"pkLobbyId\":\"LOBBY#REPLACE-WITH-REAL-LOBBY-ID\",\"secret\":\"REPLACE-WITH-YOUR-START_GAME_SECRET\"}",
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "requestContext": {
+    "http": {
+      "method": "POST",
+      "path": "/matchmake"
+    }
+  }
+}
