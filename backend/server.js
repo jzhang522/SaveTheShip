@@ -81,6 +81,40 @@ async function loadRolesFromDB(lobbyId) {
   }
 }
 
+// Invoke Lambda startGame to assign roles when game starts (backend-only, requires secret)
+async function invokeStartGameLambda(lobbyId) {
+  const apiUrl = process.env.MATCHMAKING_API_URL || process.env.VITE_API_URL;
+  const secret = process.env.MATCHMAKING_API_SECRET;
+  if (!apiUrl) {
+    console.warn('[Lambda] MATCHMAKING_API_URL / VITE_API_URL not set, skipping startGame');
+    return;
+  }
+  if (!secret) {
+    console.warn('[Lambda] MATCHMAKING_API_SECRET not set, skipping startGame');
+    return;
+  }
+  if (!lobbyId || !String(lobbyId).startsWith('LOBBY#')) {
+    console.log('[Lambda] Skipping startGame for non-matchmaking lobby:', lobbyId);
+    return;
+  }
+  console.log(`[Lambda] Invoking startGame for lobby ${lobbyId}...`);
+  try {
+    const res = await fetch(apiUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'start', lobbyId, pkLobbyId: lobbyId, secret })
+    });
+    const text = await res.text();
+    if (res.ok) {
+      console.log(`[Lambda] startGame OK for lobby ${lobbyId}`);
+    } else {
+      console.warn(`[Lambda] startGame failed: ${res.status}`, text);
+    }
+  } catch (err) {
+    console.error('[Lambda] startGame error:', err.message);
+  }
+}
+
 const TABLE_NAME = "SaveTheShipGameLobbies";
 
 // Validate that player exists in lobby in DynamoDB (required for lobbyId from matchmaking)
