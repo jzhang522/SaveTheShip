@@ -185,16 +185,19 @@ function findOrCreateGameByLobbyId(lobbyId, playerId, playerName) {
   const trimmedLobbyId = lobbyId && String(lobbyId).trim();
   if (trimmedLobbyId && games.has(trimmedLobbyId)) {
     const game = games.get(trimmedLobbyId);
-    if (game.players.size < MAX_PLAYERS_PER_GAME && game.state === 'waiting') {
+    if (game.state === 'waiting' && game.players.size < MAX_PLAYERS_PER_GAME) {
       console.log(`[Lobby] Joining existing game ${trimmedLobbyId}`);
+      return trimmedLobbyId;
+    }
+    if (game.state === 'playing') {
+      console.log(`[Lobby] Reconnecting to in-progress game ${trimmedLobbyId}`);
       return trimmedLobbyId;
     }
   }
   // Fallback: find any waiting game with space (only if no lobbyId - avoid splitting same-lobby players)
   if (!trimmedLobbyId) {
     for (let [gameId, game] of games.entries()) {
-      // if (game.players.size < MAX_PLAYERS_PER_GAME && game.state === 'waiting') {
-      if (game.players.size < MAX_PLAYERS_PER_GAME) {
+      if (game.players.size < MAX_PLAYERS_PER_GAME && game.state === 'waiting') {
         return gameId;
       }
     }
@@ -227,6 +230,41 @@ function findOrCreateGameByLobbyId(lobbyId, playerId, playerName) {
   return gameId;
 }
 
+// Invoke Lambda startGame to assign roles when game starts (backend-only, requires secret)
+async function invokeStartGameLambda(lobbyId) {
+  const apiUrl = process.env.MATCHMAKING_API_URL || process.env.VITE_API_URL;
+  const secret = process.env.MATCHMAKING_API_SECRET;
+  if (!apiUrl) {
+    console.warn('[Lambda] MATCHMAKING_API_URL / VITE_API_URL not set, skipping startGame');
+    return;
+  }
+  if (!secret) {
+    console.warn('[Lambda] MATCHMAKING_API_SECRET not set, skipping startGame');
+    return;
+  }
+  if (!lobbyId || !String(lobbyId).startsWith('LOBBY#')) {
+    console.log('[Lambda] Skipping startGame for non-matchmaking lobby:', lobbyId);
+    return;
+  }
+  console.log(`[Lambda] Invoking startGame for lobby ${lobbyId}...`);
+  try {
+    const res = await fetch(apiUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'start', lobbyId, pkLobbyId: lobbyId, secret })
+    });
+    const text = await res.text();
+    if (res.ok) {
+      console.log(`[Lambda] startGame OK for lobby ${lobbyId}`);
+    } else {
+      console.warn(`[Lambda] startGame failed: ${res.status}`, text);
+    }
+  } catch (err) {
+    console.error('[Lambda] startGame error:', err.message);
+  }
+}
+
+
 // Start 10-second countdown when lobby is filled, then start game
 function scheduleGameStart(gameId) {
   const game = games.get(gameId);
@@ -235,13 +273,14 @@ function scheduleGameStart(gameId) {
   let secondsLeft = LOBBY_COUNTDOWN_SECONDS;
   broadcastToGame(gameId, { type: 'gameStartCountdown', secondsLeft });
 
-  game.countdownTimer = setInterval(() => {
+  game.countdownTimer = setInterval(async () => {
     secondsLeft--;
     broadcastToGame(gameId, { type: 'gameStartCountdown', secondsLeft });
 
     if (secondsLeft <= 0) {
       clearInterval(game.countdownTimer);
       game.countdownTimer = null;
+      await invokeStartGameLambda(gameId);
       startGame(gameId);
       broadcastToGame(gameId, { type: 'gameStart', gameId });
     }
@@ -623,7 +662,7 @@ wss.on('connection', (ws) => {
 
         // If game already started, load roles
         let roles = {};
-        if (game.state === 'in-progress') {
+        if (game.state === 'playing') {
           roles = await loadRolesFromDB(gameId);
         }
         
@@ -1012,17 +1051,20 @@ wss.on('connection', (ws) => {
 
         game.players.delete(playerId);
 
-        // Delay DynamoDB removal so accidental nav to /game can reconnect within grace period
+        // Delay DynamoDB removal so accidental nav to /game can reconnect within grace period.
+        // Skip removal when game is playing — keep player in DynamoDB so they can reconnect.
         const removalKey = `${closedGameId}:${closedPlayerId}`;
-        const removalTimer = setTimeout(() => {
-          global.pendingDynamoRemovals?.delete(removalKey);
-          removePlayerFromDynamoDBLobby(closedGameId, closedPlayerId).catch((err) =>
-            console.error("[Lobby] DynamoDB cleanup error:", err)
-          );
-        }, 10000);
+        if (game.state === 'waiting') {
+          const removalTimer = setTimeout(() => {
+            global.pendingDynamoRemovals?.delete(removalKey);
+            removePlayerFromDynamoDBLobby(closedGameId, closedPlayerId).catch((err) =>
+              console.error("[Lobby] DynamoDB cleanup error:", err)
+            );
+          }, 10000);
 
-        if (!global.pendingDynamoRemovals) global.pendingDynamoRemovals = new Map();
-        global.pendingDynamoRemovals.set(removalKey, removalTimer);
+          if (!global.pendingDynamoRemovals) global.pendingDynamoRemovals = new Map();
+          global.pendingDynamoRemovals.set(removalKey, removalTimer);
+        }
 
         // Cancel countdown if we drop below min players during lobby (lobby no longer filled)
         if (game.state === 'waiting' && game.countdownTimer && game.players.size < MIN_PLAYERS_PER_GAME) {
