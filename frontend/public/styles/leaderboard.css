@@ -145,11 +145,33 @@ button:disabled {
     transform: none;
 }
 
+.leaderboard-list li {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
 
-/* === Mobile Layout === */
-@media (max-width: 520px) {
-  .leaderboard-area {
-    grid-template-columns: 1fr;
-    width: 90%;
-  }
+.stats {
+  display: flex;
+  gap: 0.6rem;
+  font-size: 0.8rem;
+  opacity: 0.9;
+}
+
+.stat {
+  min-width: 2.5ch;
+  text-align: right;
+}
+
+.stat.kills {
+  color: #ff6b6b;
+}
+
+.stat.fixes {
+  color: #4cffb0;
+}
+
+.stat.score {
+  font-weight: 600;
+  color: #ffffff;
 }
