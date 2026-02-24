@@ -19,7 +19,7 @@ export class Character {
     this.rotation = new THREE.Euler(0, 0, 0);
     this.velocity = new THREE.Vector3();
 
-    this.speed = 10;
+    this.speed = 12;
     this.turnSpeed = 3;
     this.jumpForce = 1.5;
     this.gravity = 2.5;
