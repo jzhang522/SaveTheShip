@@ -22,19 +22,21 @@ const MIN_PLAYERS_PER_GAME = 2; // TODO: Change to 2
 const LOBBY_COUNTDOWN_SECONDS = 3; // TODO: Change to 10
 
 const TOTAL_PANELS = 8;
-const PANELS_NEED_FIX = 6;
+const PANELS_NEED_FIX = 4;
 const PANEL_MAX_HP = 15;
+const DECAY_INTERVAL_MS = 3 * 60 * 1000; // 3 minutes
+const DECAY_PANEL_COUNT = 4; // number of undamaged panels to break each cycle
 
 // Panel positions (must match frontend controlPanel.js)
 const PANEL_POSITIONS = [
-  { id: 1, x: -26.5, y: 53.5, z: -1120.5 },
-  { id: 2, x: 160, y: 21, z: -727 },
-  { id: 3, x: 0, y: -4, z: -120 },
-  { id: 4, x: 156, y: -8, z: 136 },
-  { id: 5, x: -143, y: -8, z: 118 },
-  { id: 6, x: 0, y: -9, z: 371 },
-  { id: 7, x: 0, y: -8, z: 753 },
-  { id: 8, x: 0, y: 7, z: 1363 },
+  { id: 1, x: -26.5,  y: 53.5,  z: -1120.5 },
+  { id: 2, x: 160,    y: 21,    z: -727 },
+  { id: 3, x: 0,      y: -4,    z: -120 },
+  { id: 4, x: 156,    y: -8,    z: 136 },
+  { id: 5, x: -143,   y: -8,    z: 118 },
+  { id: 6, x: 0,      y: -9,    z: 371 },
+  { id: 7, x: 0,      y: -8,    z: 753 },
+  { id: 8, x: 0,      y: 7,     z: 1363 },
 ];
 
 // HTTP server
@@ -195,43 +197,9 @@ function findOrCreateGameByLobbyId(lobbyId, playerId, playerName) {
   for (let i = 1; i <= TOTAL_PANELS; i++) {
     game.panelHP[i] = PANEL_MAX_HP;
   }
-
+  
   games.set(gameId, game);
   return gameId;
-}
-
-// Invoke Lambda startGame to assign roles when game starts (backend-only, requires secret)
-async function invokeStartGameLambda(lobbyId) {
-  const apiUrl = process.env.MATCHMAKING_API_URL || process.env.VITE_API_URL;
-  const secret = process.env.MATCHMAKING_API_SECRET;
-  if (!apiUrl) {
-    console.warn('[Lambda] MATCHMAKING_API_URL / VITE_API_URL not set, skipping startGame');
-    return;
-  }
-  if (!secret) {
-    console.warn('[Lambda] MATCHMAKING_API_SECRET not set, skipping startGame');
-    return;
-  }
-  if (!lobbyId || !String(lobbyId).startsWith('LOBBY#')) {
-    console.log('[Lambda] Skipping startGame for non-matchmaking lobby:', lobbyId);
-    return;
-  }
-  console.log(`[Lambda] Invoking startGame for lobby ${lobbyId}...`);
-  try {
-    const res = await fetch(apiUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'start', lobbyId, pkLobbyId: lobbyId, secret })
-    });
-    const text = await res.text();
-    if (res.ok) {
-      console.log(`[Lambda] startGame OK for lobby ${lobbyId}`);
-    } else {
-      console.warn(`[Lambda] startGame failed: ${res.status}`, text);
-    }
-  } catch (err) {
-    console.error('[Lambda] startGame error:', err.message);
-  }
 }
 
 // Start 10-second countdown when lobby is filled, then start game
@@ -242,14 +210,13 @@ function scheduleGameStart(gameId) {
   let secondsLeft = LOBBY_COUNTDOWN_SECONDS;
   broadcastToGame(gameId, { type: 'gameStartCountdown', secondsLeft });
 
-  game.countdownTimer = setInterval(async () => {
+  game.countdownTimer = setInterval(() => {
     secondsLeft--;
     broadcastToGame(gameId, { type: 'gameStartCountdown', secondsLeft });
 
     if (secondsLeft <= 0) {
       clearInterval(game.countdownTimer);
       game.countdownTimer = null;
-      await invokeStartGameLambda(gameId);
       startGame(gameId);
       broadcastToGame(gameId, { type: 'gameStart', gameId });
     }
@@ -289,6 +256,58 @@ function startGame(gameId) {
   });
 
   console.log(`Game ${gameId} started — panels needing fix: [${game.panelsNeedFix.join(', ')}]`);
+
+  // Start periodic decay: every 3 minutes, damage up to 4 undamaged panels
+  startPanelDecayTimer(gameId);
+}
+
+// Start a recurring timer that sets HP of up to DECAY_PANEL_COUNT undamaged panels to 0
+function startPanelDecayTimer(gameId) {
+  const game = games.get(gameId);
+  if (!game) return;
+
+  // Clear any existing decay timer
+  if (game.decayTimer) {
+    clearInterval(game.decayTimer);
+    game.decayTimer = null;
+  }
+
+  game.decayTimer = setInterval(() => {
+    const g = games.get(gameId);
+    if (!g || g.state !== 'playing') {
+      clearInterval(g?.decayTimer);
+      if (g) g.decayTimer = null;
+      return;
+    }
+
+    // Collect panels that are at full HP (undamaged)
+    const undamaged = [];
+    for (let i = 1; i <= TOTAL_PANELS; i++) {
+      if (g.panelHP[i] >= PANEL_MAX_HP) undamaged.push(i);
+    }
+
+    if (undamaged.length === 0) return;
+
+    // Shuffle and pick up to DECAY_PANEL_COUNT
+    for (let i = undamaged.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [undamaged[i], undamaged[j]] = [undamaged[j], undamaged[i]];
+    }
+    const toBreak = undamaged.slice(0, DECAY_PANEL_COUNT);
+
+    toBreak.forEach(pid => {
+      g.panelHP[pid] = 0;
+      broadcastToGame(gameId, {
+        type: 'panelHpUpdate',
+        panelId: pid,
+        hp: 0,
+        wasDamaged: true
+      });
+    });
+
+    g.panelsNeedFix = getPanelsNeedFix(g);
+    console.log(`[Decay] Game ${gameId} — broke panels [${toBreak.join(', ')}]`);
+  }, DECAY_INTERVAL_MS);
 }
 
 // Get all panel IDs with HP < max
@@ -320,7 +339,7 @@ function cleanupPlayerFixing(game, leavingPlayerId, gameId) {
 function broadcastToGame(gameId, message) {
   const game = games.get(gameId);
   if (!game) return;
-
+  
   const data = JSON.stringify(message);
   game.players.forEach(player => {
     try {
@@ -337,7 +356,7 @@ function broadcastToGame(gameId, message) {
 function getGameState(gameId) {
   const game = games.get(gameId);
   if (!game) return null;
-
+  
   const playersList = Array.from(game.players.values()).map(p => ({
     id: p.id,
     name: p.name,
@@ -350,7 +369,7 @@ function getGameState(gameId) {
     spotlightOn: p.spotlightOn !== undefined ? p.spotlightOn : true,
     isDead: p.isDead || false
   }));
-
+  
   return {
     type: 'gameState',
     gameId,
@@ -369,7 +388,7 @@ wss.on('connection', (ws) => {
   ws.on('message', async (data) => {
     try {
       const message = JSON.parse(data);
-
+      
       // Player joins game (lobbyId/playerId from Lambda, or generated)
       if (message.type === 'join') {
         const lobbyId = typeof message.lobbyId === 'string' ? message.lobbyId.trim() : message.lobbyId;
@@ -398,7 +417,7 @@ wss.on('connection', (ws) => {
         if (game.state === 'in-progress') {
           roles = await loadRolesFromDB(gameId);
         }
-
+        
         const player = {
           id: playerId,
           name: playerName,
@@ -414,7 +433,7 @@ wss.on('connection', (ws) => {
           joinedAt: Date.now()
         };
 
-
+        
         game.players.set(playerId, player);
         players.set(playerId, { gameId, ws });
 
@@ -424,7 +443,7 @@ wss.on('connection', (ws) => {
           clearTimeout(global.pendingDynamoRemovals.get(removalKey));
           global.pendingDynamoRemovals.delete(removalKey);
         }
-
+        
         // Send welcome message
         ws.send(JSON.stringify({
           type: 'welcomeMessage',
@@ -435,7 +454,7 @@ wss.on('connection', (ws) => {
           role: player.role,
           color
         }));
-
+        
         // Update all players in game
         broadcastToGame(gameId, getGameState(gameId));
 
@@ -453,15 +472,15 @@ wss.on('connection', (ws) => {
           }));
         }
       }
-
+      
       // Player moved
       if (message.type === 'move' && playerId && gameId) {
         const game = games.get(gameId);
         if (!game) return;
-
+        
         const player = game.players.get(playerId);
         if (!player) return;
-
+        
         // Update position and rotation
         player.x = message.x;
         player.y = message.y;
@@ -469,7 +488,7 @@ wss.on('connection', (ws) => {
         if (message.rotationY !== undefined) {
           player.rotationY = message.rotationY;
         }
-
+        
         // Broadcast updated game state
         broadcastToGame(gameId, getGameState(gameId));
       }
@@ -557,14 +576,19 @@ wss.on('connection', (ws) => {
             if (angle < attackAngle) {
               const pid = panelPos.id;
               if (game.panelHP[pid] > 0) {
+                const prevHp = game.panelHP[pid];
                 game.panelHP[pid] = Math.max(0, game.panelHP[pid] - 1);
                 game.panelsNeedFix = getPanelsNeedFix(game);
 
-                broadcastToGame(gameId, {
+                const msg = {
                   type: 'panelHpUpdate',
                   panelId: pid,
                   hp: game.panelHP[pid]
-                });
+                };
+                if (prevHp >= PANEL_MAX_HP && game.panelHP[pid] < PANEL_MAX_HP) {
+                  msg.wasDamaged = true;
+                }
+                broadcastToGame(gameId, msg);
 
                 console.log(`Panel ${pid} attacked by ${playerId}! HP: ${game.panelHP[pid]}`);
               }
@@ -690,7 +714,7 @@ wss.on('connection', (ws) => {
           console.log(`Player ${playerId} stopped fixing panel ${panelId} (HP: ${game.panelHP[panelId]})`);
         }
       }
-
+      
       // Chat message - broadcast to all players in the same lobby
       if (message.type === 'chat' && playerId && gameId) {
         const game = games.get(gameId);
@@ -730,6 +754,7 @@ wss.on('connection', (ws) => {
               clearInterval(fixInfo.interval);
             }
             game.fixingIntervals = {};
+            if (game.decayTimer) { clearInterval(game.decayTimer); game.decayTimer = null; }
             games.delete(gameId);
           } else {
             broadcastToGame(gameId, getGameState(gameId));
@@ -745,7 +770,7 @@ wss.on('connection', (ws) => {
       console.error('Message handling error:', error);
     }
   });
-
+  
   ws.on('close', () => {
     if (playerId && gameId) {
       const game = games.get(gameId);
@@ -782,17 +807,18 @@ wss.on('connection', (ws) => {
             clearInterval(fixInfo.interval);
           }
           game.fixingIntervals = {};
+          if (game.decayTimer) { clearInterval(game.decayTimer); game.decayTimer = null; }
           games.delete(gameId);
         } else {
           // Notify remaining players
           broadcastToGame(gameId, getGameState(gameId));
         }
       }
-
+      
       players.delete(playerId);
     }
   });
-
+  
   ws.on('error', (error) => {
     console.error('WebSocket error:', error);
   });

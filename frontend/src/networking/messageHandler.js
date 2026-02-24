@@ -115,6 +115,66 @@ export class MessageHandler {
 
   static handlePanelHpUpdate(game, message) {
     ControlPanel.updatePanelHp(message.panelId, message.hp);
+
+    // Show notification when a panel first becomes damaged
+    if (message.wasDamaged) {
+      this.showPanelDamagedNotification(message.panelId);
+    }
+  }
+
+  static showPanelDamagedNotification(panelId) {
+    // Ensure container exists inside game container so it renders above the canvas
+    let container = document.getElementById('panelNotifications');
+    if (!container) {
+      container = document.createElement('div');
+      container.id = 'panelNotifications';
+      Object.assign(container.style, {
+        position: 'fixed',
+        top: '20px',
+        left: '50%',
+        transform: 'translateX(-50%)',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        gap: '8px',
+        zIndex: '99999',
+        pointerEvents: 'none',
+      });
+      document.body.appendChild(container);
+    }
+
+    const el = document.createElement('div');
+    Object.assign(el.style, {
+      padding: '10px 24px',
+      background: 'rgba(200, 30, 30, 0.88)',
+      color: '#fff',
+      fontSize: '15px',
+      fontWeight: '600',
+      borderRadius: '8px',
+      border: '1px solid rgba(255, 80, 80, 0.6)',
+      boxShadow: '0 4px 16px rgba(0, 0, 0, 0.5)',
+      whiteSpace: 'nowrap',
+      opacity: '0',
+      transition: 'opacity 0.3s ease, transform 0.3s ease',
+      transform: 'translateY(-20px)',
+    });
+    el.textContent = `Control Panel #${panelId} has been damaged!`;
+    container.appendChild(el);
+
+    // Trigger entrance animation on next frame
+    requestAnimationFrame(() => {
+      el.style.opacity = '1';
+      el.style.transform = 'translateY(0)';
+    });
+
+    console.log(`⚠ Notification: Control Panel #${panelId} has been damaged!`);
+
+    // Fade out and remove after 5 seconds
+    setTimeout(() => {
+      el.style.opacity = '0';
+      el.style.transform = 'translateY(-16px)';
+      setTimeout(() => el.remove(), 400);
+    }, 5000);
   }
 
   static handlePlayerFixing(game, message) {
