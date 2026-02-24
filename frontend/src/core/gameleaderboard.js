@@ -1,22 +1,28 @@
 // leaderboard.js
 
-// Placeholder leaderboard data (UI testing only)
-const mockLeaderboard = {
-  crew: [
-    { playerName: "Nova", score: 1240, kills: 1, fixes: 6 },
-    { playerName: "Orion", score: 1185, kills: 0, fixes: 5 },
-    { playerName: "Echo", score: 1110, kills: 2, fixes: 4 },
-    { playerName: "Atlas", score: 1050, kills: 1, fixes: 3 },
-    { playerName: "Luna", score: 980, kills: 0, fixes: 3 }
-  ],
-  saboteur: [
-    { playerName: "Viper", score: 1320, kills: 7, fixes: 0 },
-    { playerName: "Rogue", score: 1210, kills: 6, fixes: 0 },
-    { playerName: "Phantom", score: 1135, kills: 5, fixes: 1 },
-    { playerName: "Shade", score: 1075, kills: 4, fixes: 0 },
-    { playerName: "Nyx", score: 990, kills: 3, fixes: 0 }
-  ]
-};
+const API_URL = import.meta.env.VITE_API_URL;
+
+// Fetch leaderboard from backend
+async function fetchLeaderboard() {
+  try {
+    const response = await fetch(API_URL);
+
+    if (!response.ok) {
+      throw new Error("Failed to fetch leaderboard");
+    }
+
+    const result = await response.json();
+
+    // If using Lambda proxy integration
+    const data = result.body ? JSON.parse(result.body) : result;
+
+    return data;
+
+  } catch (error) {
+    console.error("Error loading leaderboard:", error);
+    return { crew: [], saboteur: [] };
+  }
+}
 
 // Render leaderboard lists
 function renderLeaderboard(data) {
@@ -32,9 +38,9 @@ function renderLeaderboard(data) {
       li.innerHTML = `
         <span class="name">${player.playerName}</span>
         <span class="stats">
-          <span class="stat kills">☠ ${player.kills}</span>
-          <span class="stat fixes">🔧 ${player.fixes}</span>
-          <span class="stat score">${player.score}</span>
+          <span class="stat kills">☠ ${player.damageDone ?? 0}</span>
+          <span class="stat fixes">🔧 ${player.fixedHp ?? 0}</span>
+          <span class="stat score">${player.score ?? 0}</span>
         </span>
       `;
 
@@ -42,7 +48,9 @@ function renderLeaderboard(data) {
     });
   });
 }
-// Initial render (placeholder data)
-document.addEventListener("DOMContentLoaded", () => {
-  renderLeaderboard(mockLeaderboard);
+
+// Load real data on page load
+document.addEventListener("DOMContentLoaded", async () => {
+  const leaderboardData = await fetchLeaderboard();
+  renderLeaderboard(leaderboardData);
 });
