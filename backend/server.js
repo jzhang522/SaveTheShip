@@ -18,8 +18,8 @@ const GAME_WIDTH = 1400;
 const GAME_HEIGHT = 800;
 const PLAYER_SIZE = 20;
 const MAX_PLAYERS_PER_GAME = 5;
-const MIN_PLAYERS_PER_GAME = 1; // TODO: Change to 2
-const LOBBY_COUNTDOWN_SECONDS = 1; // TODO: Change to 10
+const MIN_PLAYERS_PER_GAME = 2; // TODO: Change to 2
+const LOBBY_COUNTDOWN_SECONDS = 3; // TODO: Change to 10
 
 const TOTAL_PANELS = 8;
 const PANELS_NEED_FIX = 6;
@@ -200,6 +200,40 @@ function findOrCreateGameByLobbyId(lobbyId, playerId, playerName) {
   return gameId;
 }
 
+// Invoke Lambda startGame to assign roles when game starts (backend-only, requires secret)
+async function invokeStartGameLambda(lobbyId) {
+  const apiUrl = process.env.MATCHMAKING_API_URL || process.env.VITE_API_URL;
+  const secret = process.env.MATCHMAKING_API_SECRET;
+  if (!apiUrl) {
+    console.warn('[Lambda] MATCHMAKING_API_URL / VITE_API_URL not set, skipping startGame');
+    return;
+  }
+  if (!secret) {
+    console.warn('[Lambda] MATCHMAKING_API_SECRET not set, skipping startGame');
+    return;
+  }
+  if (!lobbyId || !String(lobbyId).startsWith('LOBBY#')) {
+    console.log('[Lambda] Skipping startGame for non-matchmaking lobby:', lobbyId);
+    return;
+  }
+  console.log(`[Lambda] Invoking startGame for lobby ${lobbyId}...`);
+  try {
+    const res = await fetch(apiUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'start', lobbyId, pkLobbyId: lobbyId, secret })
+    });
+    const text = await res.text();
+    if (res.ok) {
+      console.log(`[Lambda] startGame OK for lobby ${lobbyId}`);
+    } else {
+      console.warn(`[Lambda] startGame failed: ${res.status}`, text);
+    }
+  } catch (err) {
+    console.error('[Lambda] startGame error:', err.message);
+  }
+}
+
 // Start 10-second countdown when lobby is filled, then start game
 function scheduleGameStart(gameId) {
   const game = games.get(gameId);
@@ -208,13 +242,14 @@ function scheduleGameStart(gameId) {
   let secondsLeft = LOBBY_COUNTDOWN_SECONDS;
   broadcastToGame(gameId, { type: 'gameStartCountdown', secondsLeft });
 
-  game.countdownTimer = setInterval(() => {
+  game.countdownTimer = setInterval(async () => {
     secondsLeft--;
     broadcastToGame(gameId, { type: 'gameStartCountdown', secondsLeft });
 
     if (secondsLeft <= 0) {
       clearInterval(game.countdownTimer);
       game.countdownTimer = null;
+      await invokeStartGameLambda(gameId);
       startGame(gameId);
       broadcastToGame(gameId, { type: 'gameStart', gameId });
     }
@@ -656,6 +691,24 @@ wss.on('connection', (ws) => {
         }
       }
 
+      // Chat message - broadcast to all players in the same lobby
+      if (message.type === 'chat' && playerId && gameId) {
+        const game = games.get(gameId);
+        const player = game?.players.get(playerId);
+        if (game && player && typeof message.text === 'string') {
+          const text = String(message.text).trim().slice(0, 500);
+          if (text) {
+            broadcastToGame(gameId, {
+              type: 'chat',
+              playerId,
+              playerName: player.name,
+              color: player.color,
+              text
+            });
+          }
+        }
+      }
+
       // Player explicitly leaves (e.g. before browser close)
       if (message.type === 'leave' && playerId && gameId) {
         const game = games.get(gameId);
@@ -749,4 +802,7 @@ wss.on('connection', (ws) => {
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`Game server running on port ${PORT}`);
   console.log(`WebSocket endpoint: ws://<EC2_PUBLIC_IP>:${PORT}`);
+  const hasApi = !!(process.env.MATCHMAKING_API_URL || process.env.VITE_API_URL);
+  const hasSecret = !!process.env.MATCHMAKING_API_SECRET;
+  console.log(`[Lambda] startGame config: API_URL=${hasApi ? 'set' : 'MISSING'}, SECRET=${hasSecret ? 'set' : 'MISSING'}`);
 });
