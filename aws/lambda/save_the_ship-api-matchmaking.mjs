@@ -40,7 +40,7 @@ export const handler = async (event) => {
             case "leave":
                 return await handleLeave(lobbyId, body.playerId);
             case "start":
-                return await startGame(lobbyId);
+                return await startGame(lobbyId, body.secret);
             case "finish":
                 return await updateStatus(lobbyId, "finished", 300);
             case "expire":
@@ -281,8 +281,13 @@ async function handleLeave(lobbyId, playerId) {
 // -------------------------
 // Start game: assign roles
 // -------------------------
-async function startGame(lobbyId) {
+async function startGame(lobbyId, secret) {
     if (!lobbyId) return response(400, { message: "lobbyId required" });
+
+    const expectedSecret = process.env.START_GAME_SECRET;
+    if (!expectedSecret || secret !== expectedSecret) {
+        return response(403, { message: "Unauthorized" });
+    }
 
     // Get lobby metadata
     const lobbyResult = await ddb.send(new GetCommand({
@@ -291,6 +296,10 @@ async function startGame(lobbyId) {
     }));
     const lobby = lobbyResult.Item;
     if (!lobby) return response(404, { message: "Lobby not found" });
+
+    if (lobby.status === "in-progress") {
+        return response(200, { message: "Game already started", lobbyId });
+    }
 
     // Get all players
     const playersQuery = await ddb.send(new QueryCommand({

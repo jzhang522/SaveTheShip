@@ -9,11 +9,19 @@ function loadGameContext() {
   }
 }
 
-function initChatToggle() {
+function initChatToggle(game) {
   const chatToggle = document.getElementById('chatToggle');
   const chatWindow = document.getElementById('chatWindow');
   const chatClose = chatWindow?.querySelector('.chat-close');
   const chatInput = document.getElementById('chatInput');
+
+  function sendChatMessage() {
+    const text = chatInput?.value?.trim();
+    if (!text || !game?.ws || game.ws.readyState !== WebSocket.OPEN) return;
+    game.ws.send(JSON.stringify({ type: 'chat', text }));
+    chatInput.value = '';
+    chatInput?.blur();
+  }
 
   function toggleChat() {
     if (!chatWindow) return;
@@ -48,6 +56,13 @@ function initChatToggle() {
       chatInput.value += e.key;
     }
   }, true);
+
+  chatInput?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.repeat) {
+      e.preventDefault();
+      sendChatMessage();
+    }
+  });
 }
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -56,7 +71,7 @@ document.addEventListener('DOMContentLoaded', () => {
     window.location.replace('index.html');
     return;
   }
-  initChatToggle();
   const game = new GameLogic();
   game.init();
+  initChatToggle(game);
 });
