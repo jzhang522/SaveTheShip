@@ -1,3 +1,4 @@
+import { randomInt } from "crypto";
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import {
     DynamoDBDocumentClient,
@@ -325,8 +326,28 @@ async function startGame(lobbyId, secret) {
         return response(400, { message: `Minimum ${MIN_PLAYERS} players required`, actualCount: players.length });
     }
 
-    // Shuffle and assign sabotage role
-    const shuffled = players.sort(() => 0.5 - Math.random());
+    try {
+        await ddb.send(new UpdateCommand({
+            TableName: TABLE_NAME,
+            Key: { PK: lobbyId, SK: "METADATA" },
+            UpdateExpression: "SET #s = :status",
+            ConditionExpression: "#s = :full",
+            ExpressionAttributeNames: { "#s": "status" },
+            ExpressionAttributeValues: { ":status": "in-progress", ":full": "full" }
+        }));
+    } catch (err) {
+        if (err.name === "ConditionalCheckFailedException") {
+            return response(200, { message: "Game already started", lobbyId });
+        }
+        throw err;
+    }
+
+    // Shuffle using Fisher-Yates with crypto randomness
+    const shuffled = [...players];
+    for (let i = shuffled.length - 1; i > 0; i--) {
+        const j = randomInt(0, i + 1);
+        [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+    }
     const sabotagerCount = 1; // adjust as needed
 
     const updatePromises = shuffled.map((player, i) => {
@@ -341,15 +362,6 @@ async function startGame(lobbyId, secret) {
     });
 
     await Promise.all(updatePromises);
-
-    // Update lobby status
-    await ddb.send(new UpdateCommand({
-        TableName: TABLE_NAME,
-        Key: { PK: lobbyId, SK: "METADATA" },
-        UpdateExpression: "SET #s = :status",
-        ExpressionAttributeNames: { "#s": "status" },
-        ExpressionAttributeValues: { ":status": "in-progress" }
-    }));
 
     return response(200, { message: "Game started", lobbyId });
 }
