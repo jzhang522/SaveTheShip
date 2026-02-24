@@ -193,8 +193,7 @@ function findOrCreateGameByLobbyId(lobbyId, playerId, playerName) {
   // Fallback: find any waiting game with space (only if no lobbyId - avoid splitting same-lobby players)
   if (!trimmedLobbyId) {
     for (let [gameId, game] of games.entries()) {
-      // if (game.players.size < MAX_PLAYERS_PER_GAME && game.state === 'waiting') {
-      if (game.players.size < MAX_PLAYERS_PER_GAME) {
+      if (game.players.size < MAX_PLAYERS_PER_GAME && game.state === 'waiting') {
         return gameId;
       }
     }
@@ -225,6 +224,40 @@ function findOrCreateGameByLobbyId(lobbyId, playerId, playerName) {
   
   games.set(gameId, game);
   return gameId;
+}
+
+// Invoke Lambda startGame to assign roles when game starts (backend-only, requires secret)
+async function invokeStartGameLambda(lobbyId) {
+  const apiUrl = process.env.MATCHMAKING_API_URL || process.env.VITE_API_URL;
+  const secret = process.env.MATCHMAKING_API_SECRET;
+  if (!apiUrl) {
+    console.warn('[Lambda] MATCHMAKING_API_URL / VITE_API_URL not set, skipping startGame');
+    return;
+  }
+  if (!secret) {
+    console.warn('[Lambda] MATCHMAKING_API_SECRET not set, skipping startGame');
+    return;
+  }
+  if (!lobbyId || !String(lobbyId).startsWith('LOBBY#')) {
+    console.log('[Lambda] Skipping startGame for non-matchmaking lobby:', lobbyId);
+    return;
+  }
+  console.log(`[Lambda] Invoking startGame for lobby ${lobbyId}...`);
+  try {
+    const res = await fetch(apiUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'start', lobbyId, pkLobbyId: lobbyId, secret })
+    });
+    const text = await res.text();
+    if (res.ok) {
+      console.log(`[Lambda] startGame OK for lobby ${lobbyId}`);
+    } else {
+      console.warn(`[Lambda] startGame failed: ${res.status}`, text);
+    }
+  } catch (err) {
+    console.error('[Lambda] startGame error:', err.message);
+  }
 }
 
 // Start 10-second countdown when lobby is filled, then start game

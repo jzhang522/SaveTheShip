@@ -66,11 +66,11 @@ function initChatToggle(game) {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-  // const ctx = loadGameContext();
-  // if (!ctx?.lobbyId || !ctx?.playerId) {
-  //   window.location.replace('index.html');
-  //   return;
-  // }
+  const ctx = loadGameContext();
+  if (!ctx?.lobbyId || !ctx?.playerId) {
+    window.location.replace('index.html');
+    return;
+  }
   const game = new GameLogic();
   game.init();
   initChatToggle(game);
