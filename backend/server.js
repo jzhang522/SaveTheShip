@@ -162,11 +162,11 @@ async function removePlayerFromDynamoDBLobby(lobbyId, playerId) {
       await ddb.send(new UpdateCommand({
         TableName: TABLE_NAME,
         Key: { PK: lobbyId, SK: "METADATA" },
-        UpdateExpression: "SET #s = :expired, ttl = :ttl",
-        ExpressionAttributeNames: { "#s": "status" },
+        UpdateExpression: "SET #s = :expired, #ttl = :ttlVal",
+        ExpressionAttributeNames: { "#s": "status", "#ttl": "ttl" },
         ExpressionAttributeValues: {
           ":expired": "expired",
-          ":ttl": Math.floor(Date.now() / 1000) + 60
+          ":ttlVal": Math.floor(Date.now() / 1000) + 60
         }
       }));
     }
@@ -264,6 +264,46 @@ async function invokeStartGameLambda(lobbyId) {
   }
 }
 
+// Set lobby status to "finished" in DynamoDB when game ends (direct update, no Lambda)
+async function setLobbyStatusFinished(lobbyId) {
+  if (!lobbyId || !String(lobbyId).startsWith('LOBBY#')) return;
+  try {
+    const now = Math.floor(Date.now() / 1000);
+    const ttlSeconds = 300;
+    await ddb.send(new UpdateCommand({
+      TableName: TABLE_NAME,
+      Key: { PK: lobbyId, SK: 'METADATA' },
+      UpdateExpression: 'SET #s = :status, #ttl = :ttlVal',
+      ExpressionAttributeNames: { '#s': 'status', '#ttl': 'ttl' },
+      ExpressionAttributeValues: { ':status': 'finished', ':ttlVal': now + ttlSeconds }
+    }));
+    console.log(`[DynamoDB] Lobby ${lobbyId} status set to finished`);
+  } catch (err) {
+    console.error('[DynamoDB] Failed to set lobby finished:', err.message);
+  }
+}
+
+// Update player rows in DynamoDB with damageDone, fixedHp, score
+async function updatePlayerStatsInDynamoDB(lobbyId, playerStats) {
+  if (!lobbyId || !String(lobbyId).startsWith('LOBBY#')) return;
+  try {
+    for (const [playerId, stats] of Object.entries(playerStats)) {
+      await ddb.send(new UpdateCommand({
+        TableName: TABLE_NAME,
+        Key: { PK: lobbyId, SK: `PLAYER#${playerId}` },
+        UpdateExpression: 'SET damageDone = :dd, fixedHp = :fh, score = :s',
+        ExpressionAttributeValues: {
+          ':dd': stats.damageDone ?? 0,
+          ':fh': stats.fixedHp ?? 0,
+          ':s': stats.score ?? 0
+        }
+      }));
+    }
+    console.log(`[DynamoDB] Updated player stats for lobby ${lobbyId}`);
+  } catch (err) {
+    console.error('[DynamoDB] Failed to update player stats:', err.message);
+  }
+}
 
 // Start 10-second countdown when lobby is filled, then start game
 function scheduleGameStart(gameId) {
@@ -554,6 +594,10 @@ function endGame(gameId, winningTeam, reason) {
     playerStats,
     secondsLeft
   });
+
+  // Persist lobby status and player stats to DynamoDB (matchmaking lobbies only)
+  void setLobbyStatusFinished(gameId);
+  void updatePlayerStatsInDynamoDB(gameId, playerStats);
 
   console.log(`[GameOver] Game ${gameId} — ${winningTeam} wins! Reason: ${reason}`);
 }

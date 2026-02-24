@@ -265,9 +265,9 @@
                 await ddb.send(new UpdateCommand({
                     TableName: TABLE_NAME,
                     Key: { PK: lobbyId, SK: "METADATA" },
-                    UpdateExpression: "SET #s = :expired, ttl = :ttl",
-                    ExpressionAttributeNames: { "#s": "status" },
-                    ExpressionAttributeValues: { ":expired": "expired", ":ttl": now + 60 }
+                    UpdateExpression: "SET #s = :expired, #ttl = :ttlVal",
+                    ExpressionAttributeNames: { "#s": "status", "#ttl": "ttl" },
+                    ExpressionAttributeValues: { ":expired": "expired", ":ttlVal": now + 60 }
                 }));
             }
             return response(200, { ok: true });
@@ -348,7 +348,7 @@
         const sabotagerCount = 1; // adjust as needed
 
         const updatePromises = shuffled.map((player, i) => {
-            const role = i < sabotagerCount ? "sabotager" : "crew";
+            const role = i < sabotagerCount ? "saboteur" : "crew";
             return ddb.send(new UpdateCommand({
                 TableName: TABLE_NAME,
                 Key: { PK: lobbyId, SK: player.SK },
@@ -373,9 +373,9 @@
         await ddb.send(new UpdateCommand({
             TableName: TABLE_NAME,
             Key: { PK: lobbyId, SK: "METADATA" },
-            UpdateExpression: "SET #s = :status, ttl = :ttl",
-            ExpressionAttributeNames: { "#s": "status" },
-            ExpressionAttributeValues: { ":status": newStatus, ":ttl": now + ttlSeconds }
+            UpdateExpression: "SET #s = :status, #ttl = :ttlVal",
+            ExpressionAttributeNames: { "#s": "status", "#ttl": "ttl" },
+            ExpressionAttributeValues: { ":status": newStatus, ":ttlVal": now + ttlSeconds }
         }));
 
         return response(200, { message: `Lobby set to ${newStatus}` });
