@@ -116,6 +116,10 @@ button:disabled {
     transform: none;
 }
 
+#leaderboard {
+    margin-top: .625rem;
+}
+
 .status {
     margin-top: 1.25rem;
     font-size: 0.9375rem;
