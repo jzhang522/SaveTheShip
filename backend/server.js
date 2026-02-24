@@ -27,12 +27,6 @@ const PANEL_MAX_HP = 15;
 const DECAY_INTERVAL_MS = 3 * 60 * 1000; // 3 minutes
 const DECAY_PANEL_COUNT = 4; // number of undamaged panels to break each cycle
 
-// Role & win-condition constants
-const SABOTEUR_HP = 5;
-const CREW_HP = 3;
-const GAME_DURATION_MS = 15 * 60 * 1000; // 15 minutes
-const TIMER_BROADCAST_INTERVAL_MS = 1000; // broadcast remaining time every second
-
 // Panel positions (must match frontend controlPanel.js)
 const PANEL_POSITIONS = [
   { id: 1, x: -26.5,  y: 53.5,  z: -1120.5 },
@@ -59,21 +53,7 @@ function generateId() {
 // Generate random color from palette
 function generateRandomColor() {
   const colors = [0x000000, 0x8B00FF, 0xFF0000, 0x00FF00, 0xFFFF00, 0x0000FF, 0xFFFFFF, 0xFFA500];
-  return colors[Math.floor(Math.random() * colors.length)]; // fallback, not used for unique assignment
-}
-
-// Assign a unique color to a player in a game
-function assignUniqueColor(game) {
-  const palette = [0x000000, 0x8B00FF, 0xFF0000, 0x00FF00, 0xFFFF00, 0x0000FF, 0xFFFFFF, 0xFFA500];
-  const used = new Set();
-  for (const p of game.players.values()) {
-    if (p.color != null) used.add(p.color);
-  }
-  for (const color of palette) {
-    if (!used.has(color)) return color;
-  }
-  // If all colors are used, pick a random one (should not happen with max 8 players)
-  return palette[Math.floor(Math.random() * palette.length)];
+  return colors[Math.floor(Math.random() * colors.length)];
 }
 
 // Utility: fetch roles from DynamoDB
@@ -209,12 +189,7 @@ function findOrCreateGameByLobbyId(lobbyId, playerId, playerName) {
     panelHP: {},
     fixingIntervals: {},
     countdownTimer: null,
-    decayTimer: null,
-    gameTimerInterval: null,
-    gameStartTime: null,
-    gameEndTime: null,
-    createdAt: Date.now(),
-    playerStats: new Map(), // playerId -> { damageDone, fixedHp }
+    createdAt: Date.now()
   };
 
   // Initialize all panels with max HP
@@ -293,50 +268,12 @@ function selectPanelsNeedFix() {
   return allIds.slice(0, PANELS_NEED_FIX);
 }
 
-// Assign roles: one random saboteur, rest are crew. Set HP accordingly.
-function assignRoles(game) {
-  const playerIds = Array.from(game.players.keys());
-  const saboteurIdx = Math.floor(Math.random() * playerIds.length);
-
-  playerIds.forEach((pid, idx) => {
-    const player = game.players.get(pid);
-    if (idx === saboteurIdx) {
-      player.role = 'saboteur';
-      player.maxHp = SABOTEUR_HP;
-      player.hp = SABOTEUR_HP;
-    } else {
-      player.role = 'crew';
-      player.maxHp = CREW_HP;
-      player.hp = CREW_HP;
-    }
-    player.isDead = false;
-  });
-
-  // Send each player their own role assignment (private)
-  game.players.forEach((player) => {
-    if (player.ws?.readyState === WebSocket.OPEN) {
-      player.ws.send(JSON.stringify({
-        type: 'roleAssignment',
-        role: player.role,
-        maxHp: player.maxHp,
-        hp: player.hp
-      }));
-    }
-  });
-
-  console.log(`[Roles] Game ${game.id}: saboteur=${playerIds[saboteurIdx]}, crew=${playerIds.filter((_, i) => i !== saboteurIdx).join(', ')}`);
-}
-
-// Start the game: assign roles, select broken panels, set their HP to 0, and notify all players
+// Start the game: select broken panels, set their HP to 0, and notify all players
 function startGame(gameId) {
   const game = games.get(gameId);
   if (!game || game.state === 'playing') return;
 
   game.state = 'playing';
-
-  // Assign roles & HP
-  assignRoles(game);
-
   const brokenPanelIds = selectPanelsNeedFix();
 
   // Set HP to 0 for broken panels, max for others
@@ -355,9 +292,6 @@ function startGame(gameId) {
 
   // Start periodic decay: every 3 minutes, damage up to 4 undamaged panels
   startPanelDecayTimer(gameId);
-
-  // Start 15-minute game timer
-  startGameTimer(gameId);
 }
 
 // Start a recurring timer that sets HP of up to DECAY_PANEL_COUNT undamaged panels to 0
@@ -406,150 +340,7 @@ function startPanelDecayTimer(gameId) {
 
     g.panelsNeedFix = getPanelsNeedFix(g);
     console.log(`[Decay] Game ${gameId} — broke panels [${toBreak.join(', ')}]`);
-
-    // Check if all panels are now damaged
-    checkWinConditions(gameId);
   }, DECAY_INTERVAL_MS);
-}
-
-// Start the 15-minute countdown timer; crew wins when it expires
-function startGameTimer(gameId) {
-  const game = games.get(gameId);
-  if (!game) return;
-
-  game.gameStartTime = Date.now();
-  game.gameEndTime = game.gameStartTime + GAME_DURATION_MS;
-
-  // Broadcast remaining time every second
-  game.gameTimerInterval = setInterval(() => {
-    const g = games.get(gameId);
-    if (!g || g.state !== 'playing') {
-      clearInterval(g?.gameTimerInterval);
-      if (g) g.gameTimerInterval = null;
-      return;
-    }
-    const remaining = Math.max(0, g.gameEndTime - Date.now());
-    broadcastToGame(gameId, {
-      type: 'gameTimer',
-      remainingMs: remaining
-    });
-
-    // Time's up → crew wins
-    if (remaining <= 0) {
-      clearInterval(g.gameTimerInterval);
-      g.gameTimerInterval = null;
-      endGame(gameId, 'crew', 'Time is up! The crew survived!');
-    }
-  }, TIMER_BROADCAST_INTERVAL_MS);
-}
-
-// Check win conditions and end game if met
-function checkWinConditions(gameId) {
-  const game = games.get(gameId);
-  if (!game || game.state !== 'playing') return;
-
-  // Condition 1: All crew dead → saboteur wins
-  let allCrewDead = true;
-  let hasCrewPlayers = false;
-  for (const player of game.players.values()) {
-    if (player.role === 'crew') {
-      hasCrewPlayers = true;
-      if (!player.isDead) {
-        allCrewDead = false;
-        break;
-      }
-    }
-  }
-  if (hasCrewPlayers && allCrewDead) {
-    endGame(gameId, 'saboteur', 'All crew members have been eliminated!');
-    return;
-  }
-
-
-  // Condition 2: All control panels HP < PANEL_MAX_HP → saboteur wins
-  let allPanelsDamaged = true;
-  let allPanelsFixed = true;
-  for (let i = 1; i <= TOTAL_PANELS; i++) {
-    if (game.panelHP[i] >= PANEL_MAX_HP) {
-      allPanelsDamaged = false;
-    } else {
-      allPanelsFixed = false;
-    }
-  }
-  if (allPanelsDamaged) {
-    endGame(gameId, 'saboteur', 'All control panels have been compromised!');
-    return;
-  }
-
-  // Condition 3: All panels fixed AND saboteur dead → crew wins
-  let saboteurDead = false;
-  for (const player of game.players.values()) {
-    if (player.role === 'saboteur') {
-      saboteurDead = player.isDead;
-      break;
-    }
-  }
-  if (allPanelsFixed && saboteurDead) {
-    endGame(gameId, 'crew', 'All panels are fixed and the saboteur is dead!');
-    return;
-  }
-}
-
-// End the game, broadcast result, and clean up timers
-function endGame(gameId, winningTeam, reason) {
-  const game = games.get(gameId);
-  if (!game || game.state === 'ended') return;
-
-  game.state = 'ended';
-
-  // Clean up all timers
-  if (game.gameTimerInterval) { clearInterval(game.gameTimerInterval); game.gameTimerInterval = null; }
-  if (game.decayTimer) { clearInterval(game.decayTimer); game.decayTimer = null; }
-  if (game.countdownTimer) { clearInterval(game.countdownTimer); game.countdownTimer = null; }
-  for (const [panelId, fixInfo] of Object.entries(game.fixingIntervals)) {
-    clearInterval(fixInfo.interval);
-  }
-  game.fixingIntervals = {};
-
-  // Calculate seconds left (0 if timer expired)
-  let secondsLeft = 0;
-  if (game.gameEndTime && Date.now() < game.gameEndTime) {
-    secondsLeft = Math.floor((game.gameEndTime - Date.now()) / 1000);
-    if (secondsLeft < 0) secondsLeft = 0;
-  }
-
-  // Prepare stats for each player
-  const playerStats = {};
-  for (const [playerId, player] of game.players.entries()) {
-    const stats = game.playerStats.get(playerId) || { damageDone: 0, fixedHp: 0 };
-    let score = 0;
-    if (player.role === 'saboteur') {
-      score = stats.damageDone * 50;
-      if (winningTeam === 'saboteur') score += 1000;
-      score += secondsLeft * 2;
-    } else {
-      score = stats.fixedHp * 10;
-      if (winningTeam === 'crew') score += 1000;
-      score += secondsLeft * 2;
-    }
-    playerStats[playerId] = {
-      name: player.name,
-      role: player.role,
-      damageDone: stats.damageDone,
-      fixedHp: stats.fixedHp,
-      score
-    };
-  }
-
-  broadcastToGame(gameId, {
-    type: 'gameOver',
-    winningTeam,
-    reason,
-    playerStats,
-    secondsLeft
-  });
-
-  console.log(`[GameOver] Game ${gameId} — ${winningTeam} wins! Reason: ${reason}`);
 }
 
 // Get all panel IDs with HP < max
@@ -652,7 +443,7 @@ wss.on('connection', (ws) => {
         const game = games.get(gameId);
         console.log(`[Join] lobbyId=${lobbyId} playerId=${playerId} gameId=${gameId} playersInGame=${game.players.size}`);
 
-        const color = assignUniqueColor(game);
+        const color = generateRandomColor();
 
         // If game already started, load roles
         let roles = {};
@@ -674,10 +465,6 @@ wss.on('connection', (ws) => {
           isDead: false,
           joinedAt: Date.now()
         };
-        // Initialize stats if not present
-        if (!game.playerStats.has(playerId)) {
-          game.playerStats.set(playerId, { damageDone: 0, fixedHp: 0 });
-        }
 
         
         game.players.set(playerId, player);
@@ -804,10 +591,6 @@ wss.on('connection', (ws) => {
                 attackerId: playerId,
                 targetId: closestId
               }));
-              // Track attack damage
-              const stats = game.playerStats.get(playerId) || { damageDone: 0, fixedHp: 0 };
-              stats.damageDone += 1;
-              game.playerStats.set(playerId, stats);
             }
           }
 
@@ -841,8 +624,6 @@ wss.on('connection', (ws) => {
                 broadcastToGame(gameId, msg);
 
                 console.log(`Panel ${pid} attacked by ${playerId}! HP: ${game.panelHP[pid]}`);
-                // Check if all panels are now damaged
-                checkWinConditions(gameId);
               }
             }
           }
@@ -862,8 +643,6 @@ wss.on('connection', (ws) => {
           }
           broadcastToGame(gameId, getGameState(gameId));
           console.log(`Player ${playerId} has died`);
-          // Check if this death triggers a win condition
-          checkWinConditions(gameId);
         }
       }
 
@@ -907,15 +686,7 @@ wss.on('connection', (ws) => {
           playerId: fixPlayerId,
           interval: setInterval(() => {
             try {
-              const prevHp = game.panelHP[panelId] || 0;
-              game.panelHP[panelId] = Math.min(PANEL_MAX_HP, prevHp + 1);
-
-              // Track fixed HP for the player
-              const stats = game.playerStats.get(fixPlayerId) || { damageDone: 0, fixedHp: 0 };
-              if (game.panelHP[panelId] > prevHp) {
-                stats.fixedHp += (game.panelHP[panelId] - prevHp);
-                game.playerStats.set(fixPlayerId, stats);
-              }
+              game.panelHP[panelId] = Math.min(PANEL_MAX_HP, (game.panelHP[panelId] || 0) + 1);
 
               // Broadcast HP update
               broadcastToGame(fixGameId, {
@@ -1017,7 +788,6 @@ wss.on('connection', (ws) => {
             }
             game.fixingIntervals = {};
             if (game.decayTimer) { clearInterval(game.decayTimer); game.decayTimer = null; }
-            if (game.gameTimerInterval) { clearInterval(game.gameTimerInterval); game.gameTimerInterval = null; }
             games.delete(gameId);
           } else {
             broadcastToGame(gameId, getGameState(gameId));
@@ -1071,7 +841,6 @@ wss.on('connection', (ws) => {
           }
           game.fixingIntervals = {};
           if (game.decayTimer) { clearInterval(game.decayTimer); game.decayTimer = null; }
-          if (game.gameTimerInterval) { clearInterval(game.gameTimerInterval); game.gameTimerInterval = null; }
           games.delete(gameId);
         } else {
           // Notify remaining players

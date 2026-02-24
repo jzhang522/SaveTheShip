@@ -181,9 +181,7 @@ export class EventManager {
   static setupPointerLock(game) {
     const domElement = game.renderer.domElement;
 
-    document.addEventListener('click', (e) => {
-      // Don't re-lock pointer when game-over overlay is showing
-      if (document.getElementById('gameOverOverlay')) return;
+    document.addEventListener('click', () => {
       domElement.requestPointerLock();
     });
 
