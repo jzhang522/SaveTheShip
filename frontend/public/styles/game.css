@@ -213,3 +213,218 @@
 .panel-damage-notification.fade-out {
     animation: panel-notif-out 0.4s ease-in forwards;
 }
+
+/* ─── Game Timer ─── */
+.game-timer {
+    position: absolute;
+    top: 14px;
+    right: 14px;
+    padding: 8px 18px;
+    background: rgba(0, 0, 0, 0.75);
+    color: #fff;
+    font-size: 22px;
+    font-weight: 700;
+    font-family: 'Courier New', Courier, monospace;
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    z-index: 100;
+    letter-spacing: 2px;
+    pointer-events: none;
+}
+
+.game-timer.urgent {
+    color: #ff4444;
+    border-color: rgba(255, 68, 68, 0.6);
+    animation: timer-pulse 1s ease-in-out infinite;
+}
+
+@keyframes timer-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+
+/* ─── Role Indicator (persistent corner badge) ─── */
+.role-indicator {
+    position: absolute;
+    top: 14px;
+    left: 14px;
+    padding: 6px 16px;
+    font-size: 13px;
+    font-weight: 700;
+    border-radius: 6px;
+    z-index: 100;
+    pointer-events: none;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+
+.role-indicator.role-saboteur {
+    background: rgba(180, 30, 30, 0.85);
+    color: #ffcccc;
+    border: 1px solid rgba(255, 80, 80, 0.6);
+}
+
+.role-indicator.role-crew {
+    background: rgba(30, 80, 180, 0.85);
+    color: #cce0ff;
+    border: 1px solid rgba(80, 140, 255, 0.6);
+}
+
+/* ─── Role Banner (full-screen announcement) ─── */
+.role-banner {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 99999;
+    pointer-events: none;
+    transition: opacity 0.5s ease;
+}
+
+.role-banner-content {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    padding: 40px 60px;
+    border-radius: 16px;
+    animation: role-banner-pop 0.5s ease-out forwards;
+}
+
+.role-banner.role-saboteur .role-banner-content {
+    background: rgba(120, 10, 10, 0.92);
+    border: 2px solid rgba(255, 80, 80, 0.7);
+    box-shadow: 0 0 60px rgba(255, 50, 50, 0.4);
+}
+
+.role-banner.role-crew .role-banner-content {
+    background: rgba(10, 40, 120, 0.92);
+    border: 2px solid rgba(80, 140, 255, 0.7);
+    box-shadow: 0 0 60px rgba(50, 100, 255, 0.4);
+}
+
+.role-icon {
+    font-size: 48px;
+}
+
+.role-text {
+    font-size: 28px;
+    color: #fff;
+    font-weight: 300;
+}
+
+.role-text strong {
+    font-weight: 800;
+    letter-spacing: 3px;
+}
+
+.role-desc {
+    font-size: 14px;
+    color: rgba(255, 255, 255, 0.7);
+    text-align: center;
+}
+
+@keyframes role-banner-pop {
+    0% { opacity: 0; transform: scale(0.8); }
+    100% { opacity: 1; transform: scale(1); }
+}
+
+/* ─── Game Over Overlay ─── */
+.game-over-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    background: rgba(0, 0, 0, 0.8);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 999999;
+    opacity: 0;
+    transition: opacity 0.5s ease;
+}
+
+.game-over-box {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 16px;
+    padding: 48px 64px;
+    border-radius: 20px;
+    animation: role-banner-pop 0.5s ease-out forwards;
+    text-align: center;
+}
+
+.game-over-win {
+    background: rgba(20, 80, 20, 0.95);
+    border: 2px solid rgba(80, 255, 80, 0.5);
+    box-shadow: 0 0 80px rgba(50, 255, 50, 0.25);
+}
+
+.game-over-lose {
+    background: rgba(80, 15, 15, 0.95);
+    border: 2px solid rgba(255, 80, 80, 0.5);
+    box-shadow: 0 0 80px rgba(255, 50, 50, 0.25);
+}
+
+.game-over-result {
+    font-size: 48px;
+    font-weight: 900;
+    letter-spacing: 6px;
+    color: #fff;
+}
+
+.game-over-win .game-over-result {
+    text-shadow: 0 0 30px rgba(100, 255, 100, 0.5);
+}
+
+.game-over-lose .game-over-result {
+    text-shadow: 0 0 30px rgba(255, 100, 100, 0.5);
+}
+
+.game-over-team {
+    font-size: 24px;
+    color: rgba(255, 255, 255, 0.9);
+    font-weight: 600;
+}
+
+.game-over-reason {
+    font-size: 15px;
+    color: rgba(255, 255, 255, 0.65);
+    max-width: 400px;
+}
+
+.game-over-role {
+    font-size: 14px;
+    color: rgba(255, 255, 255, 0.5);
+    margin-top: 4px;
+}
+
+.game-over-btn {
+    margin-top: 20px;
+    padding: 14px 48px;
+    font-size: 18px;
+    font-weight: 700;
+    border: none;
+    border-radius: 10px;
+    cursor: pointer;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: #fff;
+    letter-spacing: 1px;
+    transition: transform 0.2s, box-shadow 0.2s;
+    box-shadow: 0 4px 20px rgba(102, 126, 234, 0.4);
+}
+
+.game-over-btn:hover {
+    transform: scale(1.05);
+    box-shadow: 0 6px 28px rgba(102, 126, 234, 0.6);
+}
+
+.game-over-btn:active {
+    transform: scale(0.98);
+}

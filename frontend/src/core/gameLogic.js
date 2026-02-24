@@ -17,6 +17,7 @@ export class GameLogic {
     this.players = new Map();
     this.otherPlayers = new Map();
     this.controlPanels = new Map();
+    this.role = null; // 'saboteur' or 'crew'
 
     this.renderer = null;
     this.camera = null;
