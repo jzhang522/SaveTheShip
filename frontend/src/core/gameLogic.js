@@ -17,6 +17,7 @@ export class GameLogic {
     this.players = new Map();
     this.otherPlayers = new Map();
     this.controlPanels = new Map();
+    this.role = null; // 'saboteur' or 'crew'
 
     this.renderer = null;
     this.camera = null;
@@ -40,6 +41,7 @@ export class GameLogic {
   init() {
     this.renderer = createRenderer();
     this.setupScene();
+    this.createHeartsUI();
     EventManager.setup(this);
     this.connect();
   }
@@ -62,6 +64,22 @@ export class GameLogic {
 
     this.character = new Character(this.inputState);
     this.fpsCamera = new FPSCamera(this.camera, this.character);
+
+    // HP change callback — update hearts UI
+    this.character._onHpChange = (hp, maxHp, isDead) => {
+      this.updateHeartsUI(hp, maxHp);
+    };
+
+    // Death callback — enter ghost mode (no fog, no spotlight, ambient light, no model)
+    this.character._onDeath = () => {
+      this.scene3d.setFogEnabled(false);
+      this.scene3d.setLocalSpotlightVisible(false);
+      this.scene3d.setAmbientLightEnabled(true);
+      // Notify server so other players can hide this player
+      if (this.ws?.readyState === WebSocket.OPEN) {
+        this.ws.send(JSON.stringify({ type: 'playerDied' }));
+      }
+    };
   }
 
   loadGameContext() {
@@ -134,6 +152,44 @@ export class GameLogic {
     if (statusEl) {
       statusEl.textContent = message;
       statusEl.style.color = isConnected ? '#0f0' : '#f00';
+    }
+  }
+
+  /**
+   * Create the hearts overlay inside the game container.
+   */
+  createHeartsUI() {
+    const container = document.getElementById('gameContainer');
+    if (!container) return;
+
+    const heartsDiv = document.createElement('div');
+    heartsDiv.id = 'heartsUI';
+    heartsDiv.className = 'hearts-ui';
+    container.appendChild(heartsDiv);
+
+    this.updateHeartsUI(this.character.hp, this.character.maxHp);
+  }
+
+  /**
+   * Update the hearts display.
+   */
+  updateHeartsUI(hp, maxHp) {
+    const heartsDiv = document.getElementById('heartsUI');
+    if (!heartsDiv) return;
+
+    heartsDiv.innerHTML = '';
+    for (let i = 0; i < maxHp; i++) {
+      const heart = document.createElement('span');
+      heart.className = i < hp ? 'heart heart-full' : 'heart heart-empty';
+      heart.textContent = i < hp ? '❤️' : '🖤';
+      heartsDiv.appendChild(heart);
+    }
+
+    if (hp <= 0) {
+      const deadLabel = document.createElement('span');
+      deadLabel.className = 'dead-label';
+      deadLabel.textContent = ' DEAD';
+      heartsDiv.appendChild(deadLabel);
     }
   }
 }

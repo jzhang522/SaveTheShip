@@ -2,12 +2,19 @@
  * Game loop: update logic, network throttling, and rendering.
  */
 export function startGameLoop(game) {
-  const loop = () => {
+  const targetFPS = 30;
+  const frameInterval = 1000 / targetFPS;
+  let lastFrameTime = 0;
+
+  const loop = (now) => {
     game.animationId = requestAnimationFrame(loop);
+    const elapsed = now - lastFrameTime;
+    if (elapsed < frameInterval) return;
+    lastFrameTime = now - (elapsed % frameInterval);
     updateGame(game);
     render(game);
   };
-  loop();
+  game.animationId = requestAnimationFrame(loop);
 }
 
 function updateGame(game) {
@@ -16,20 +23,29 @@ function updateGame(game) {
   const deltaTime = game.clock.getDelta();
 
   // Movement → camera → spotlight
-  game.character.update();
+  game.character.update(deltaTime);
   game.fpsCamera.update();
 
   const characterPos = game.character.getPosition();
   const characterYaw = game.character.getYaw();
-  game.scene3d.updateSpotlightPosition(characterPos, characterYaw);
 
-  // Update local player model
+  // Only update spotlight when alive
+  if (!game.character.isDead) {
+    game.scene3d.updateSpotlightPosition(characterPos, characterYaw);
+  }
+
+  // Update local player model (hide when dead)
   const localPlayer = game.players.get(game.playerId);
   if (localPlayer?._model) {
     localPlayer._model.update(
       characterPos.x, characterPos.y, characterPos.z,
       deltaTime, characterYaw
     );
+    // Hide/show model based on alive/dead state
+    const modelGroup = localPlayer._model.getGroup();
+    if (modelGroup) {
+      modelGroup.visible = !game.character.isDead;
+    }
   }
 
   // Update remote player animations

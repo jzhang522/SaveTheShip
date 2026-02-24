@@ -12,13 +12,16 @@ export class EnvironmentBuilder {
       model.position.set(0, 0, 0);
       model.rotation.y = Math.PI; // Rotate to face forward
       
+      // Shared material for all ship meshes
+      const sharedMaterial = new THREE.MeshStandardMaterial({ 
+        map: shipTexture,
+        metalness: 0.3,
+        roughness: 0.4
+      });
+
       model.traverse((node) => {
         if (node.isMesh) {
-          node.material = new THREE.MeshStandardMaterial({ 
-            map: shipTexture,
-            metalness: 0.3,
-            roughness: 0.4
-          });
+          node.material = sharedMaterial;
           node.castShadow = true;
           node.receiveShadow = true;
         }

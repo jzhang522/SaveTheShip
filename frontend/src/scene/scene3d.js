@@ -22,10 +22,6 @@ export class Scene3D {
   }
 
   setupLighting() {
-    // Ambient light for general illumination
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.05);
-    this.scene.add(ambientLight);
-
     // Handheld flashlight spotlight - narrow, focused beam
     this.spotlight = new THREE.SpotLight(0xffffff, 10, 200, Math.PI / 3, 0.3, 0.1);
     this.spotlight.position.set(0, 10, 0);
@@ -34,6 +30,11 @@ export class Scene3D {
     this.spotlight.shadow.mapSize.height = 1024;  
     this.scene.add(this.spotlight);
     this.scene.add(this.spotlight.target);
+
+    // Ambient light for ghost/dead mode (hidden by default)
+    this.ambientLight = new THREE.AmbientLight(0xffffff, 1);
+    this.ambientLight.visible = false;
+    this.scene.add(this.ambientLight);
   }
   
   updateSpotlightPosition(characterPos, characterYaw) {
@@ -67,6 +68,39 @@ export class Scene3D {
       this._cpanelLoaded = true;
       this._checkAllLoaded();
     });
+  }
+
+  toggleSpotlight() {
+    return this.spotlight.visible = !this.spotlight.visible;
+  }
+
+  /**
+   * Enable or disable fog (used for ghost/dead mode).
+   */
+  setFogEnabled(enabled) {
+    if (enabled) {
+      this.scene.fog = new THREE.Fog(0x000000, 0, 150);
+    } else {
+      this.scene.fog = null;
+    }
+  }
+
+  /**
+   * Show or hide the local player's spotlight.
+   */
+  setLocalSpotlightVisible(visible) {
+    if (this.spotlight) {
+      this.spotlight.visible = visible;
+    }
+  }
+
+  /**
+   * Enable or disable ambient light (used for ghost/dead mode).
+   */
+  setAmbientLightEnabled(enabled) {
+    if (this.ambientLight) {
+      this.ambientLight.visible = enabled;
+    }
   }
 
   getScene() {

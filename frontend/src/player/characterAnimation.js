@@ -21,7 +21,10 @@ export class CharacterAnimation {
     this.idleAnimationName = 'Idle';
     this.runAnimationName = 'Run';
     this.fixAnimationName = 'Fix';
+    this.kickAnimationName = 'Kick';
     this.isFixing = false;
+    this.isAttacking = false;
+    this.spotlightOn = true;
 
     this.group = new THREE.Group();
     this.fbxModel = null;
@@ -29,11 +32,12 @@ export class CharacterAnimation {
 
     this.spotlight = null;
     this.spotlightTarget = null;
+    this.nameLabel = null;
     if (!isLocalPlayer) {
       const { spotlight, target } = createPlayerSpotlight();
       this.spotlight = spotlight;
       this.spotlightTarget = target;
-      PlayerNameLabel.createNameLabel(name, this.group);
+      this.nameLabel = PlayerNameLabel.createNameLabel(name, this.group);
     }
 
     PlayerAnimationLoader.loadAnimations(this);
@@ -48,7 +52,7 @@ export class CharacterAnimation {
     const wasMoving = this.isMoving;
     this.isMoving = delta > this.movementThreshold;
 
-    if (this.fbxLoaded && this.animationManager && this.isMoving !== wasMoving && !this.isFixing) {
+    if (this.fbxLoaded && this.animationManager && this.isMoving !== wasMoving && !this.isFixing && !this.isAttacking) {
       this.playAnimation(this.isMoving ? this.runAnimationName : this.idleAnimationName);
     }
   }
@@ -75,6 +79,24 @@ export class CharacterAnimation {
     }
     if (this.animationManager) {
       this.animationManager.update(deltaTime);
+    }
+  }
+
+  toggleSpotlight() {
+    this.spotlightOn = !this.spotlightOn;
+    if (this.spotlight) {
+      this.spotlight.visible = this.spotlightOn;
+    }
+    return this.spotlightOn;
+  }
+
+  setSpotlightVisible(visible) {
+    this.spotlightOn = visible;
+    if (this.spotlight) {
+      this.spotlight.visible = visible;
+    }
+    if (this.nameLabel) {
+      this.nameLabel.visible = visible;
     }
   }
 

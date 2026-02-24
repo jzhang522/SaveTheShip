@@ -26,7 +26,7 @@ export function checkCollisionMultiRay(position, direction, shipMeshes) {
   for (const offset of RAY_OFFSETS) {
     _rayOrigin.copy(position).add(offset);
     _raycaster.set(_rayOrigin, direction);
-    const hits = _raycaster.intersectObjects(shipMeshes, true);
+    const hits = _raycaster.intersectObjects(shipMeshes, false);
     if (hits.length > 0 && hits[0].distance < 1) return hits[0];
   }
   return null;
@@ -38,7 +38,7 @@ export function checkCollisionMultiRay(position, direction, shipMeshes) {
  */
 export function stickToSurface(position, velocity, shipMeshes) {
   _raycaster.set(position, _downDir);
-  const intersects = _raycaster.intersectObjects(shipMeshes, true);
+  const intersects = _raycaster.intersectObjects(shipMeshes, false);
 
   if (intersects.length > 0) {
     const surfacePoint = intersects[0].point;
