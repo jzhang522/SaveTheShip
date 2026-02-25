@@ -176,11 +176,11 @@ async function removePlayerFromDynamoDBLobby(lobbyId, playerId) {
       await ddb.send(new UpdateCommand({
         TableName: TABLE_NAME,
         Key: { PK: lobbyId, SK: "METADATA" },
-        UpdateExpression: "SET #s = :expired, ttl = :ttl",
-        ExpressionAttributeNames: { "#s": "status" },
+        UpdateExpression: "SET #s = :expired, #ttl = :ttlVal",
+        ExpressionAttributeNames: { "#s": "status", "#ttl": "ttl" },
         ExpressionAttributeValues: {
           ":expired": "expired",
-          ":ttl": Math.floor(Date.now() / 1000) + 60
+          ":ttlVal": Math.floor(Date.now() / 1000) + 60
         }
       }));
     }
@@ -199,8 +199,12 @@ function findOrCreateGameByLobbyId(lobbyId, playerId, playerName) {
   const trimmedLobbyId = lobbyId && String(lobbyId).trim();
   if (trimmedLobbyId && games.has(trimmedLobbyId)) {
     const game = games.get(trimmedLobbyId);
-    if (game.players.size < MAX_PLAYERS_PER_GAME && game.state === 'waiting') {
+    if (game.state === 'waiting' && game.players.size < MAX_PLAYERS_PER_GAME) {
       console.log(`[Lobby] Joining existing game ${trimmedLobbyId}`);
+      return trimmedLobbyId;
+    }
+    if (game.state === 'playing') {
+      console.log(`[Lobby] Reconnecting to in-progress game ${trimmedLobbyId}`);
       return trimmedLobbyId;
     }
   }
@@ -269,6 +273,47 @@ async function invokeStartGameLambda(lobbyId) {
   }
 }
 
+// Set lobby status to "finished" in DynamoDB when game ends (direct update, no Lambda)
+async function setLobbyStatusFinished(lobbyId) {
+  if (!lobbyId || !String(lobbyId).startsWith('LOBBY#')) return;
+  try {
+    const now = Math.floor(Date.now() / 1000);
+    const ttlSeconds = 300;
+    await ddb.send(new UpdateCommand({
+      TableName: TABLE_NAME,
+      Key: { PK: lobbyId, SK: 'METADATA' },
+      UpdateExpression: 'SET #s = :status, #ttl = :ttlVal',
+      ExpressionAttributeNames: { '#s': 'status', '#ttl': 'ttl' },
+      ExpressionAttributeValues: { ':status': 'finished', ':ttlVal': now + ttlSeconds }
+    }));
+    console.log(`[DynamoDB] Lobby ${lobbyId} status set to finished`);
+  } catch (err) {
+    console.error('[DynamoDB] Failed to set lobby finished:', err.message);
+  }
+}
+
+// Update player rows in DynamoDB with damageDone, fixedHp, score
+async function updatePlayerStatsInDynamoDB(lobbyId, playerStats) {
+  if (!lobbyId || !String(lobbyId).startsWith('LOBBY#')) return;
+  try {
+    for (const [playerId, stats] of Object.entries(playerStats)) {
+      await ddb.send(new UpdateCommand({
+        TableName: TABLE_NAME,
+        Key: { PK: lobbyId, SK: `PLAYER#${playerId}` },
+        UpdateExpression: 'SET damageDone = :dd, fixedHp = :fh, score = :s',
+        ExpressionAttributeValues: {
+          ':dd': stats.damageDone ?? 0,
+          ':fh': stats.fixedHp ?? 0,
+          ':s': stats.score ?? 0
+        }
+      }));
+    }
+    console.log(`[DynamoDB] Updated player stats for lobby ${lobbyId}`);
+  } catch (err) {
+    console.error('[DynamoDB] Failed to update player stats:', err.message);
+  }
+}
+
 // Start 10-second countdown when lobby is filled, then start game
 function scheduleGameStart(gameId) {
   const game = games.get(gameId);
@@ -277,13 +322,14 @@ function scheduleGameStart(gameId) {
   let secondsLeft = LOBBY_COUNTDOWN_SECONDS;
   broadcastToGame(gameId, { type: 'gameStartCountdown', secondsLeft });
 
-  game.countdownTimer = setInterval(() => {
+  game.countdownTimer = setInterval(async () => {
     secondsLeft--;
     broadcastToGame(gameId, { type: 'gameStartCountdown', secondsLeft });
 
     if (secondsLeft <= 0) {
       clearInterval(game.countdownTimer);
       game.countdownTimer = null;
+      await invokeStartGameLambda(gameId);
       startGame(gameId);
       broadcastToGame(gameId, { type: 'gameStart', gameId });
     }
@@ -375,6 +421,150 @@ function startPanelDecayTimer(gameId) {
     g.panelsNeedFix = getPanelsNeedFix(g);
     console.log(`[Decay] Game ${gameId} — broke panels [${toBreak.join(', ')}]`);
   }, DECAY_INTERVAL_MS);
+}
+
+// Start the 15-minute countdown timer; crew wins when it expires
+function startGameTimer(gameId) {
+  const game = games.get(gameId);
+  if (!game) return;
+
+  game.gameStartTime = Date.now();
+  game.gameEndTime = game.gameStartTime + GAME_DURATION_MS;
+
+  // Broadcast remaining time every second
+  game.gameTimerInterval = setInterval(() => {
+    const g = games.get(gameId);
+    if (!g || g.state !== 'playing') {
+      clearInterval(g?.gameTimerInterval);
+      if (g) g.gameTimerInterval = null;
+      return;
+    }
+    const remaining = Math.max(0, g.gameEndTime - Date.now());
+    broadcastToGame(gameId, {
+      type: 'gameTimer',
+      remainingMs: remaining
+    });
+
+    // Time's up → crew wins
+    if (remaining <= 0) {
+      clearInterval(g.gameTimerInterval);
+      g.gameTimerInterval = null;
+      endGame(gameId, 'crew', 'Time is up! The crew survived!');
+    }
+  }, TIMER_BROADCAST_INTERVAL_MS);
+}
+
+// Check win conditions and end game if met
+function checkWinConditions(gameId) {
+  const game = games.get(gameId);
+  if (!game || game.state !== 'playing') return;
+
+  // Condition 1: All crew dead → saboteur wins
+  let allCrewDead = true;
+  let hasCrewPlayers = false;
+  for (const player of game.players.values()) {
+    if (player.role === 'crew') {
+      hasCrewPlayers = true;
+      if (!player.isDead) {
+        allCrewDead = false;
+        break;
+      }
+    }
+  }
+  if (hasCrewPlayers && allCrewDead) {
+    endGame(gameId, 'saboteur', 'All crew members have been eliminated!');
+    return;
+  }
+
+
+  // Condition 2: All control panels HP < PANEL_MAX_HP → saboteur wins
+  let allPanelsDamaged = true;
+  let allPanelsFixed = true;
+  for (let i = 1; i <= TOTAL_PANELS; i++) {
+    if (game.panelHP[i] >= PANEL_MAX_HP) {
+      allPanelsDamaged = false;
+    } else {
+      allPanelsFixed = false;
+    }
+  }
+  if (allPanelsDamaged) {
+    endGame(gameId, 'saboteur', 'All control panels have been compromised!');
+    return;
+  }
+
+  // Condition 3: All panels fixed AND saboteur dead → crew wins
+  let saboteurDead = false;
+  for (const player of game.players.values()) {
+    if (player.role === 'saboteur') {
+      saboteurDead = player.isDead;
+      break;
+    }
+  }
+  if (allPanelsFixed && saboteurDead) {
+    endGame(gameId, 'crew', 'All panels are fixed and the saboteur is dead!');
+    return;
+  }
+}
+
+// End the game, broadcast result, and clean up timers
+function endGame(gameId, winningTeam, reason) {
+  const game = games.get(gameId);
+  if (!game || game.state === 'ended') return;
+
+  game.state = 'ended';
+
+  // Clean up all timers
+  if (game.gameTimerInterval) { clearInterval(game.gameTimerInterval); game.gameTimerInterval = null; }
+  if (game.decayTimer) { clearInterval(game.decayTimer); game.decayTimer = null; }
+  if (game.countdownTimer) { clearInterval(game.countdownTimer); game.countdownTimer = null; }
+  for (const [panelId, fixInfo] of Object.entries(game.fixingIntervals)) {
+    clearInterval(fixInfo.interval);
+  }
+  game.fixingIntervals = {};
+
+  // Calculate seconds left (0 if timer expired)
+  let secondsLeft = 0;
+  if (game.gameEndTime && Date.now() < game.gameEndTime) {
+    secondsLeft = Math.floor((game.gameEndTime - Date.now()) / 1000);
+    if (secondsLeft < 0) secondsLeft = 0;
+  }
+
+  // Prepare stats for each player
+  const playerStats = {};
+  for (const [playerId, player] of game.players.entries()) {
+    const stats = game.playerStats.get(playerId) || { damageDone: 0, fixedHp: 0 };
+    let score = 0;
+    if (player.role === 'saboteur') {
+      score = stats.damageDone * 50;
+      if (winningTeam === 'saboteur') score += 1000;
+      score += secondsLeft * 2;
+    } else {
+      score = stats.fixedHp * 10;
+      if (winningTeam === 'crew') score += 1000;
+      score += secondsLeft * 2;
+    }
+    playerStats[playerId] = {
+      name: player.name,
+      role: player.role,
+      damageDone: stats.damageDone,
+      fixedHp: stats.fixedHp,
+      score
+    };
+  }
+
+  broadcastToGame(gameId, {
+    type: 'gameOver',
+    winningTeam,
+    reason,
+    playerStats,
+    secondsLeft
+  });
+
+  // Persist lobby status and player stats to DynamoDB (matchmaking lobbies only)
+  void setLobbyStatusFinished(gameId);
+  void updatePlayerStatsInDynamoDB(gameId, playerStats);
+
+  console.log(`[GameOver] Game ${gameId} — ${winningTeam} wins! Reason: ${reason}`);
 }
 
 // Get all panel IDs with HP < max
@@ -481,7 +671,7 @@ wss.on('connection', (ws) => {
 
         // If game already started, load roles
         let roles = {};
-        if (game.state === 'in-progress') {
+        if (game.state === 'playing') {
           roles = await loadRolesFromDB(gameId);
         }
         
@@ -849,17 +1039,20 @@ wss.on('connection', (ws) => {
 
         game.players.delete(playerId);
 
-        // Delay DynamoDB removal so accidental nav to /game can reconnect within grace period
+        // Delay DynamoDB removal so accidental nav to /game can reconnect within grace period.
+        // Skip removal when game is playing — keep player in DynamoDB so they can reconnect.
         const removalKey = `${closedGameId}:${closedPlayerId}`;
-        const removalTimer = setTimeout(() => {
-          global.pendingDynamoRemovals?.delete(removalKey);
-          removePlayerFromDynamoDBLobby(closedGameId, closedPlayerId).catch((err) =>
-            console.error("[Lobby] DynamoDB cleanup error:", err)
-          );
-        }, 10000);
+        if (game.state === 'waiting') {
+          const removalTimer = setTimeout(() => {
+            global.pendingDynamoRemovals?.delete(removalKey);
+            removePlayerFromDynamoDBLobby(closedGameId, closedPlayerId).catch((err) =>
+              console.error("[Lobby] DynamoDB cleanup error:", err)
+            );
+          }, 10000);
 
-        if (!global.pendingDynamoRemovals) global.pendingDynamoRemovals = new Map();
-        global.pendingDynamoRemovals.set(removalKey, removalTimer);
+          if (!global.pendingDynamoRemovals) global.pendingDynamoRemovals = new Map();
+          global.pendingDynamoRemovals.set(removalKey, removalTimer);
+        }
 
         // Cancel countdown if we drop below min players during lobby (lobby no longer filled)
         if (game.state === 'waiting' && game.countdownTimer && game.players.size < MIN_PLAYERS_PER_GAME) {
