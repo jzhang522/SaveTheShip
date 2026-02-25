@@ -103,9 +103,9 @@ async function loadRolesFromDB(lobbyId) {
 
 const TABLE_NAME = "SaveTheShipGameLobbies";
 
-// Validate that player exists in lobby in DynamoDB (required for lobbyId from matchmaking)
+// Validate that player exists in lobby in DynamoDB and return player data (DDB is single source of truth)
 async function validatePlayerInLobby(lobbyId, playerId) {
-  if (!lobbyId || !playerId) return false;
+  if (!lobbyId || !playerId) return null;
   try {
     const res = await ddb.send(new GetCommand({
       TableName: TABLE_NAME,
@@ -113,12 +113,12 @@ async function validatePlayerInLobby(lobbyId, playerId) {
     }));
     if (!res.Item) {
       console.log(`[Join] Player not in DynamoDB lobby (may have left or been removed)`);
-      return false;
+      return null;
     }
-    return true;
+    return res.Item;
   } catch (err) {
     console.error("[Join] DynamoDB validation failed (check AWS credentials/region):", err.message);
-    return false;
+    return null;
   }
 }
 
@@ -283,7 +283,7 @@ async function setLobbyStatusFinished(lobbyId) {
   }
 }
 
-// Update player rows in DynamoDB with damageDone, fixedHp, score
+// Update player rows in DynamoDB with damageDone, fixedHp, score, playerName (DDB single source of truth)
 async function updatePlayerStatsInDynamoDB(lobbyId, playerStats) {
   if (!lobbyId || !String(lobbyId).startsWith('LOBBY#')) return;
   try {
@@ -291,11 +291,12 @@ async function updatePlayerStatsInDynamoDB(lobbyId, playerStats) {
       await ddb.send(new UpdateCommand({
         TableName: TABLE_NAME,
         Key: { PK: lobbyId, SK: `PLAYER#${playerId}` },
-        UpdateExpression: 'SET damageDone = :dd, fixedHp = :fh, score = :s',
+        UpdateExpression: 'SET damageDone = :dd, fixedHp = :fh, score = :s, playerName = :pn',
         ExpressionAttributeValues: {
           ':dd': stats.damageDone ?? 0,
           ':fh': stats.fixedHp ?? 0,
-          ':s': stats.score ?? 0
+          ':s': stats.score ?? 0,
+          ':pn': (stats.name != null ? String(stats.name) : 'Player')
         }
       }));
     }
@@ -724,7 +725,6 @@ wss.on('connection', (ws) => {
       if (message.type === 'join') {
         const lobbyId = typeof message.lobbyId === 'string' ? message.lobbyId.trim() : message.lobbyId;
         const rawPlayerId = message.playerId && String(message.playerId).trim();
-        const playerName = message.name || (rawPlayerId ? `Player_${rawPlayerId.substr(0, 5)}` : 'Player');
 
         // Require valid matchmaking credentials — reject crafted joins
         if (!lobbyId || !String(lobbyId).startsWith('LOBBY#')) {
@@ -741,13 +741,15 @@ wss.on('connection', (ws) => {
         }
         playerId = rawPlayerId;
 
-        const isValid = await validatePlayerInLobby(lobbyId, playerId);
-        if (!isValid) {
+        const playerItem = await validatePlayerInLobby(lobbyId, playerId);
+        if (!playerItem) {
           console.log(`[Join] Rejected: player not in DynamoDB lobby lobbyId=${lobbyId} playerId=${playerId}`);
           ws.send(JSON.stringify({ type: 'error', message: 'Invalid lobby session' }));
           ws.close();
           return;
         }
+        // Use playerName from DDB (single source of truth)
+        const playerName = playerItem.playerName || message.name || `Player_${playerId.substr(0, 5)}`;
 
         gameId = findOrCreateGameByLobbyId(lobbyId, playerId, playerName);
         const game = games.get(gameId);
