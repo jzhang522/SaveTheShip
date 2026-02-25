@@ -57,6 +57,9 @@ export class MessageHandler {
       case 'gameOver':
         this.handleGameOver(game, message);
         break;
+      case 'error':
+        this.handleError(game, message);
+        break;
     }
 
     if (message.type === 'chat') {
@@ -421,6 +424,11 @@ export class MessageHandler {
       sessionStorage.removeItem('gameContext');
       window.location.href = 'index.html';
     });
+  }
+
+  static handleError(game, message) {
+    sessionStorage.removeItem('gameContext');
+    window.location.href = 'index.html';
   }
 
   // --- Score/Stats UI ---
