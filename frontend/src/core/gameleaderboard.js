@@ -24,6 +24,12 @@ async function fetchLeaderboard() {
   }
 }
 
+function escapeHtml(text) {
+  const div = document.createElement("div");
+  div.textContent = text ?? "";
+  return div.innerHTML;
+}
+
 // Render leaderboard lists
 function renderLeaderboard(data) {
   const TOP_N = 10;
@@ -37,7 +43,7 @@ function renderLeaderboard(data) {
       const li = document.createElement("li");
 
       li.innerHTML = `
-        <span class="name">${player.playerName}</span>
+        <span class="name">${escapeHtml(player.playerName)}</span>
         <span class="stats">
           <span class="stat kills">☠ ${player.damageDone ?? 0}</span>
           <span class="stat fixes">🔧 ${player.fixedHp ?? 0}</span>
