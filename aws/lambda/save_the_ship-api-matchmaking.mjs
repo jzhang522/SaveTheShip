@@ -1,4 +1,4 @@
-    import { randomInt } from "crypto";
+    import { randomInt, createHmac, timingSafeEqual } from "crypto";
     import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
     import {
         DynamoDBDocumentClient,
@@ -6,7 +6,8 @@
         UpdateCommand,
         QueryCommand,
         GetCommand,
-        DeleteCommand
+        DeleteCommand,
+        ScanCommand
     } from "@aws-sdk/lib-dynamodb";
     import { v4 as uuidv4 } from "uuid";
 
@@ -15,6 +16,23 @@
 
     const TABLE_NAME = "SaveTheShipGameLobbies";
     const GSI_NAME = "status-playerCount-index";
+
+    function createLeaveToken(lobbyId, playerId) {
+        const secret = process.env.LEAVE_TOKEN_SECRET;
+        if (!secret) return null;
+        return createHmac("sha256", secret).update(`${lobbyId}|${playerId}`).digest("base64url");
+    }
+
+    function verifyLeaveToken(lobbyId, playerId, token) {
+        const expected = createLeaveToken(lobbyId, playerId);
+        if (!expected || !token || typeof token !== "string") return false;
+        if (expected.length !== token.length) return false;
+        try {
+            return timingSafeEqual(Buffer.from(expected, "utf8"), Buffer.from(token, "utf8"));
+        } catch {
+            return false;
+        }
+    }
     const MAX_PLAYERS = 5;
     const MIN_PLAYERS = 2;
     const SERVER_ENDPOINT = "????????????????????????????????????????"; // TODO: Change to the actual server endpoint
@@ -40,13 +58,13 @@
                 case "validateSession":
                     return await handleValidateSession(lobbyId, body.playerId);
                 case "leave":
-                    return await handleLeave(lobbyId, body.playerId);
+                    return await handleLeave(lobbyId, body.playerId, body.leaveToken);
                 case "start":
                     return await startGame(lobbyId, body.secret);
                 case "finish":
-                    return await updateStatus(lobbyId, "finished", 300);
+                    return await updateStatus(lobbyId, "finished", 300, body.secret);
                 case "expire":
-                    return await updateStatus(lobbyId, "expired", 60);
+                    return await updateStatus(lobbyId, "expired", 60, body.secret);
                 default:
                     return response(400, { message: "Invalid action" });
             }
@@ -77,74 +95,96 @@
             joinedAt: Date.now()
         };
 
-        // Try to find an existing lobby (3 attempts)
-        for (let attempt = 0; attempt < 3; attempt++) {
-            const queryResult = await ddb.send(new QueryCommand({
-                TableName: TABLE_NAME,
-                IndexName: GSI_NAME,
-                KeyConditionExpression: "#gpk = :gpk AND begins_with(#gsk, :status)",
-                ExpressionAttributeNames: {
-                    "#gpk": "gsiPK",
-                    "#gsk": "gsiSK"
-                },
-                ExpressionAttributeValues: {
-                    ":gpk": "LOBBY",
-                    ":status": "waiting"
-                },
-                ScanIndexForward: true,
-                Limit: 1
-            }));
+        // Use base table Scan with ConsistentRead (second player sees first lobby immediately)
+        const scanResult = await ddb.send(new ScanCommand({
+            TableName: TABLE_NAME,
+            FilterExpression: "SK = :sk AND #s = :status",
+            ExpressionAttributeNames: { "#s": "status" },
+            ExpressionAttributeValues: { ":sk": "METADATA", ":status": "waiting" },
+            ConsistentRead: true
+        }));
 
-            if (queryResult.Items && queryResult.Items.length > 0) {
-                const lobby = queryResult.Items[0];
-                const newCount = lobby.playerCount + 1;
-                const isNowFull = newCount >= MAX_PLAYERS;
-                const newStatus = isNowFull ? "full" : "waiting";
-                const gsiSK = `${newStatus}#${newCount}`;
+        const waitingLobbies = (scanResult.Items || [])
+            .filter((item) => item.status === "waiting" && item.playerCount < MAX_PLAYERS)
+            .sort((a, b) => (a.playerCount ?? 0) - (b.playerCount ?? 0));
 
-                try {
-                    // Update lobby playerCount atomically
-                    await ddb.send(new UpdateCommand({
+        if (waitingLobbies.length > 0) {
+            const lobby = waitingLobbies[0];
+            const newCount = lobby.playerCount + 1;
+            const isNowFull = newCount >= MAX_PLAYERS;
+            const newStatus = isNowFull ? "full" : "waiting";
+            const gsiSK = `${newStatus}#${newCount}`;
+
+            try {
+                await ddb.send(new UpdateCommand({
+                    TableName: TABLE_NAME,
+                    Key: { PK: lobby.PK, SK: "METADATA" },
+                    UpdateExpression: "SET playerCount = :newCount, #s = :newStatus, gsiSK = :gsiSK",
+                    ConditionExpression: "playerCount < :max AND #s = :waiting",
+                    ExpressionAttributeNames: { "#s": "status" },
+                    ExpressionAttributeValues: {
+                        ":newCount": newCount,
+                        ":newStatus": newStatus,
+                        ":gsiSK": gsiSK,
+                        ":max": MAX_PLAYERS,
+                        ":waiting": "waiting"
+                    }
+                }));
+
+                await ddb.send(new PutCommand({
+                    TableName: TABLE_NAME,
+                    Item: {
+                        PK: lobby.PK,
+                        SK: `PLAYER#${playerId}`,
+                        entityType: "PLAYER",
+                        ...playerObject
+                    }
+                }));
+
+                const leaveToken = createLeaveToken(lobby.PK, playerId);
+                return response(200, {
+                    lobbyId: lobby.PK,
+                    playerId,
+                    leaveToken,
+                    status: newStatus,
+                    serverEndpoint: lobby.serverEndpoint
+                });
+
+            } catch (err) {
+                if (err.name === "ConditionalCheckFailedException") {
+                    const retryScan = await ddb.send(new ScanCommand({
                         TableName: TABLE_NAME,
-                        Key: { PK: lobby.PK, SK: "METADATA" },
-                        UpdateExpression: `
-                                SET playerCount = :newCount,
-                                    #s = :newStatus,
-                                    gsiSK = :gsiSK
-                            `,
-                        ConditionExpression: "playerCount < :max AND #s = :waiting",
+                        FilterExpression: "SK = :sk AND #s = :status",
                         ExpressionAttributeNames: { "#s": "status" },
-                        ExpressionAttributeValues: {
-                            ":newCount": newCount,
-                            ":newStatus": newStatus,
-                            ":gsiSK": gsiSK,
-                            ":max": MAX_PLAYERS,
-                            ":waiting": "waiting"
-                        }
+                        ExpressionAttributeValues: { ":sk": "METADATA", ":status": "waiting" },
+                        ConsistentRead: true
                     }));
-
-                    // Add the new player item
-                    await ddb.send(new PutCommand({
-                        TableName: TABLE_NAME,
-                        Item: {
-                            PK: lobby.PK,
-                            SK: `PLAYER#${playerId}`,
-                            entityType: "PLAYER",
-                            ...playerObject
-                        }
-                    }));
-
-                    return response(200, {
-                        lobbyId: lobby.PK,
-                        playerId,
-                        status: newStatus,
-                        serverEndpoint: lobby.serverEndpoint
-                    });
-
-                } catch (err) {
-                    if (err.name === "ConditionalCheckFailedException") continue;
-                    throw err;
+                    const retryLobbies = (retryScan.Items || [])
+                        .filter((item) => item.status === "waiting" && item.playerCount < MAX_PLAYERS)
+                        .sort((a, b) => (a.playerCount ?? 0) - (b.playerCount ?? 0));
+                    if (retryLobbies.length > 0) {
+                        const retryLobby = retryLobbies[0];
+                        const rCount = retryLobby.playerCount + 1;
+                        const rFull = rCount >= MAX_PLAYERS;
+                        const rStatus = rFull ? "full" : "waiting";
+                        const rGsiSK = `${rStatus}#${rCount}`;
+                        await ddb.send(new UpdateCommand({
+                            TableName: TABLE_NAME,
+                            Key: { PK: retryLobby.PK, SK: "METADATA" },
+                            UpdateExpression: "SET playerCount = :nc, #s = :ns, gsiSK = :gsk",
+                            ConditionExpression: "playerCount < :max AND #s = :waiting",
+                            ExpressionAttributeNames: { "#s": "status" },
+                            ExpressionAttributeValues: { ":nc": rCount, ":ns": rStatus, ":gsk": rGsiSK, ":max": MAX_PLAYERS, ":waiting": "waiting" }
+                        }));
+                        await ddb.send(new PutCommand({
+                            TableName: TABLE_NAME,
+                            Item: { PK: retryLobby.PK, SK: `PLAYER#${playerId}`, entityType: "PLAYER", ...playerObject }
+                        }));
+                        const leaveToken = createLeaveToken(retryLobby.PK, playerId);
+                        return response(200, { lobbyId: retryLobby.PK, playerId, leaveToken, status: rStatus, serverEndpoint: retryLobby.serverEndpoint });
+                    }
                 }
+                throw err;
             }
         }
 
@@ -181,9 +221,11 @@
             }
         }));
 
+        const leaveToken = createLeaveToken(newLobbyId, playerId);
         return response(200, {
             lobbyId: newLobbyId,
             playerId,
+            leaveToken,
             status: "waiting",
             serverEndpoint: SERVER_ENDPOINT
         });
@@ -216,7 +258,8 @@
             if (!validStatuses.includes(lobby.status)) {
                 return response(200, { valid: false });
             }
-            return response(200, { valid: true });
+            const leaveToken = createLeaveToken(lobbyId, playerId);
+            return response(200, { valid: true, leaveToken });
         } catch (err) {
             console.error("validateSession error:", err);
             return response(200, { valid: false });
@@ -226,12 +269,15 @@
     // -------------------------
     // Remove player from lobby (browser close, leave button, etc.)
     // -------------------------
-    async function handleLeave(lobbyId, playerId) {
+    async function handleLeave(lobbyId, playerId, leaveToken) {
         if (!lobbyId || !playerId) {
             return response(400, { ok: false, message: "lobbyId and playerId required" });
         }
         if (!String(lobbyId).startsWith("LOBBY#")) {
             return response(400, { ok: false, message: "Invalid lobbyId format" });
+        }
+        if (!verifyLeaveToken(lobbyId, playerId, leaveToken)) {
+            return response(403, { ok: false, message: "Invalid or missing leave token" });
         }
         try {
             await ddb.send(new DeleteCommand({
@@ -364,20 +410,34 @@
     }
 
     // -------------------------
-    // Update lobby status
+    // Update lobby status (finish/expire - trusted callers only)
     // -------------------------
-    async function updateStatus(lobbyId, newStatus, ttlSeconds) {
+    async function updateStatus(lobbyId, newStatus, ttlSeconds, secret) {
         if (!lobbyId) return response(400, { message: "lobbyId required" });
+        if (!String(lobbyId).startsWith("LOBBY#")) {
+            return response(400, { message: "Invalid lobbyId format" });
+        }
+        const expectedSecret = process.env.ADMIN_SECRET;
+        if (!expectedSecret || secret !== expectedSecret) {
+            return response(403, { message: "Unauthorized" });
+        }
         const now = Math.floor(Date.now() / 1000);
 
-        await ddb.send(new UpdateCommand({
-            TableName: TABLE_NAME,
-            Key: { PK: lobbyId, SK: "METADATA" },
-            UpdateExpression: "SET #s = :status, #ttl = :ttlVal",
-            ExpressionAttributeNames: { "#s": "status", "#ttl": "ttl" },
-            ExpressionAttributeValues: { ":status": newStatus, ":ttlVal": now + ttlSeconds }
-        }));
-
+        try {
+            await ddb.send(new UpdateCommand({
+                TableName: TABLE_NAME,
+                Key: { PK: lobbyId, SK: "METADATA" },
+                UpdateExpression: "SET #s = :status, #ttl = :ttlVal",
+                ConditionExpression: "attribute_exists(PK)",
+                ExpressionAttributeNames: { "#s": "status", "#ttl": "ttl" },
+                ExpressionAttributeValues: { ":status": newStatus, ":ttlVal": now + ttlSeconds }
+            }));
+        } catch (err) {
+            if (err.name === "ConditionalCheckFailedException") {
+                return response(404, { message: "Lobby not found" });
+            }
+            throw err;
+        }
         return response(200, { message: `Lobby set to ${newStatus}` });
     }
 

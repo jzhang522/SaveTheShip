@@ -96,9 +96,11 @@ export class MessageHandler {
     game.playerId = message.playerId;
     game.gameId = message.gameId;
 
-    document.getElementById('gameId').textContent = game.gameId;
+    const gameIdEl = document.getElementById('gameId');
+    gameIdEl.textContent = game.gameId ? game.gameId.substr(0, 14) : '-';
+    gameIdEl.title = game.gameId || '';
     document.getElementById('playerId').textContent = game.playerId.substr(0, 8);
-    document.getElementById('instructions').textContent = 'Click to lock mouse, use WASD to move, mouse to look';
+    document.getElementById('instructions').textContent = 'Click game area to lock mouse';
 
     this.createLocalPlayer(game, message.color);
   }

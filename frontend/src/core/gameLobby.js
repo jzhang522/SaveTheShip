@@ -229,14 +229,15 @@ function sendLeaveMessage(opts = {}) {
     const ctx = loadStoredLobbyContext();
     const lobbyId = ctx?.lobbyId;
     const playerId = ctx?.playerId;
+    const leaveToken = ctx?.leaveToken;
     if (!lobbyId || !playerId) return Promise.resolve();
 
-    // Call Lambda API to remove player from DynamoDB
-    const leavePromise = API_URL
+    // Call Lambda API to remove player from DynamoDB (leaveToken required for auth)
+    const leavePromise = API_URL && leaveToken
         ? fetch(API_URL, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ action: "leave", lobbyId, playerId }),
+            body: JSON.stringify({ action: "leave", lobbyId, playerId, leaveToken }),
             keepalive: opts.keepalive ?? true
         }).catch(() => { })
         : Promise.resolve();
@@ -255,6 +256,7 @@ function storeLobbyContext(playerName, data) {
     const ctx = {
         lobbyId: data?.lobbyId ?? data?.LobbyId,
         playerId: data?.playerId ?? data?.PlayerId,
+        leaveToken: data?.leaveToken,
         playerName: playerName,
         serverEndpoint: data?.serverEndpoint ?? data?.ServerEndpoint,
         serverIp: data?.serverIp,
@@ -364,6 +366,8 @@ document.getElementById("leaveLobbyBtn")?.addEventListener("click", async () => 
     clearLobbyContext();
     document.getElementById("lobbyView")?.classList.remove("visible");
     document.getElementById("matchmakingCard")?.classList.remove("hidden");
+    const statusEl = document.getElementById("status");
+    if (statusEl) statusEl.textContent = "";
 });
 
 // Note: We do NOT use beforeunload/pagehide to send leave - that would incorrectly
@@ -400,6 +404,12 @@ async function initLobby() {
             return;
         }
         if (statusDiv) statusDiv.textContent = "";
+        // Merge leaveToken from validateSession (for sessions created before leave-token deploy)
+        if (data?.leaveToken) {
+            const updated = { ...stored, leaveToken: data.leaveToken };
+            sessionStorage.setItem(LOBBY_CONTEXT_KEY, JSON.stringify(updated));
+            stored.leaveToken = data.leaveToken;
+        }
 
         showLobbyView(stored.playerName, stored);
         const lobbyStatusEl = document.getElementById("lobbyStatus");

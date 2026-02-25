@@ -1,3 +1,3 @@
 {
-    "body": "{\"action\": \"finish\", \"lobbyId\": \"lobby-1708500000000\"}"
+    "body": "{\"action\": \"finish\", \"lobbyId\": \"LOBBY#test-uuid\", \"secret\": \"<ADMIN_SECRET>\"}"
 }
