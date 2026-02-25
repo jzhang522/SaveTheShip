@@ -13,6 +13,8 @@ let cachedIdleClip = null;    // Idle animation clip
 let cachedRunClip = null;     // Run animation clip (root-motion filtered)
 let cachedFixClip = null;     // Fix animation clip
 let cachedKickClip = null;    // Kick animation clip
+let cachedHitClip = null;     // Hit animation clip
+let cachedDeathClip = null;   // Death animation clip
 let cacheReady = false;
 let cacheLoading = false;
 const pendingPlayers = [];    // Players waiting for cache to be ready
@@ -52,7 +54,6 @@ export class PlayerAnimationLoader {
                 console.warn('FBX Fix animation error:', error);
               }
 
-              // Load Kick animation
               loader.load('/Kick.fbx', (kickModel) => {
                 try {
                   cachedKickClip = kickModel.animations[0] || null;
@@ -60,20 +61,105 @@ export class PlayerAnimationLoader {
                   console.warn('FBX Kick animation error:', error);
                 }
 
-                // All assets loaded — apply to all pending players
-                cacheReady = true;
-                for (const p of pendingPlayers) {
-                  this._applyToPlayer(p);
-                }
-                pendingPlayers.length = 0;
+                loader.load('/Hit.fbx', (hitModel) => {
+                  try {
+                    cachedHitClip = hitModel.animations[0] || null;
+                  } catch (error) {
+                    console.warn('FBX Hit animation error:', error);
+                  }
+
+                  loader.load('/Death.fbx', (deathModel) => {
+                    try {
+                      cachedDeathClip = deathModel.animations[0] || null;
+                    } catch (error) {
+                      console.warn('FBX Death animation error:', error);
+                    }
+
+                    // All assets loaded — apply to all pending players
+                    cacheReady = true;
+                    for (const p of pendingPlayers) {
+                      this._applyToPlayer(p);
+                    }
+                    pendingPlayers.length = 0;
+                  }, undefined, (error) => {
+                    console.warn('FBX death loading failed:', error);
+                    cacheReady = true;
+                    for (const p of pendingPlayers) {
+                      this._applyToPlayer(p);
+                    }
+                    pendingPlayers.length = 0;
+                  });
+                }, undefined, (error) => {
+                  console.warn('FBX hit loading failed:', error);
+                  loader.load('/Death.fbx', (deathModel) => {
+                    try {
+                      cachedDeathClip = deathModel.animations[0] || null;
+                    } catch (error) {
+                      console.warn('FBX Death animation error:', error);
+                    }
+                    cacheReady = true;
+                    for (const p of pendingPlayers) {
+                      this._applyToPlayer(p);
+                    }
+                    pendingPlayers.length = 0;
+                  }, undefined, (error) => {
+                    console.warn('FBX death loading failed:', error);
+                    cacheReady = true;
+                    for (const p of pendingPlayers) {
+                      this._applyToPlayer(p);
+                    }
+                    pendingPlayers.length = 0;
+                  });
+                });
               }, undefined, (error) => {
                 console.warn('FBX kick loading failed:', error);
-                // Still mark cache ready even if kick fails
-                cacheReady = true;
-                for (const p of pendingPlayers) {
-                  this._applyToPlayer(p);
-                }
-                pendingPlayers.length = 0;
+                loader.load('/Hit.fbx', (hitModel) => {
+                  try {
+                    cachedHitClip = hitModel.animations[0] || null;
+                  } catch (error) {
+                    console.warn('FBX Hit animation error:', error);
+                  }
+                  loader.load('/Death.fbx', (deathModel) => {
+                    try {
+                      cachedDeathClip = deathModel.animations[0] || null;
+                    } catch (error) {
+                      console.warn('FBX Death animation error:', error);
+                    }
+                    cacheReady = true;
+                    for (const p of pendingPlayers) {
+                      this._applyToPlayer(p);
+                    }
+                    pendingPlayers.length = 0;
+                  }, undefined, (error) => {
+                    console.warn('FBX death loading failed:', error);
+                    cacheReady = true;
+                    for (const p of pendingPlayers) {
+                      this._applyToPlayer(p);
+                    }
+                    pendingPlayers.length = 0;
+                  });
+                }, undefined, (error) => {
+                  console.warn('FBX hit loading failed:', error);
+                  loader.load('/Death.fbx', (deathModel) => {
+                    try {
+                      cachedDeathClip = deathModel.animations[0] || null;
+                    } catch (error) {
+                      console.warn('FBX Death animation error:', error);
+                    }
+                    cacheReady = true;
+                    for (const p of pendingPlayers) {
+                      this._applyToPlayer(p);
+                    }
+                    pendingPlayers.length = 0;
+                  }, undefined, (error) => {
+                    console.warn('FBX death loading failed:', error);
+                    cacheReady = true;
+                    for (const p of pendingPlayers) {
+                      this._applyToPlayer(p);
+                    }
+                    pendingPlayers.length = 0;
+                  });
+                });
               });
             }, undefined, (error) => {
               console.warn('FBX fix loading failed:', error);
@@ -112,6 +198,7 @@ export class PlayerAnimationLoader {
 
       player.animationManager = new AnimationManager(model);
 
+
       if (cachedIdleClip) {
         player.animationManager.addAnimation('Idle', cachedIdleClip.clone());
         player.idleAnimationName = 'Idle';
@@ -127,6 +214,14 @@ export class PlayerAnimationLoader {
       if (cachedKickClip) {
         player.animationManager.addAnimation('Kick', cachedKickClip.clone());
         player.kickAnimationName = 'Kick';
+      }
+      if (cachedHitClip) {
+        player.animationManager.addAnimation('Hit', cachedHitClip.clone());
+        player.hitAnimationName = 'Hit';
+      }
+      if (cachedDeathClip) {
+        player.animationManager.addAnimation('Death', cachedDeathClip.clone());
+        player.deathAnimationName = 'Death';
       }
 
       player.fbxLoaded = true;

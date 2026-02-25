@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Leaderboard</title>
+    <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="styles/leaderboard.css">
+    
+
+</head>
+<body>
+    <div class="leaderboard-container">
+        <h1>Leaderboard</h1>
+        <div class="leaderboard-wrapper">
+            <div id="leaderboardLoading" class="leaderboard-loading">
+                <div class="leaderboard-loading-spinner"></div>
+                <p>Loading leaderboard...</p>
+            </div>
+            <section class="leaderboard-area" id="leaderboardArea" aria-hidden="true">
+            <div class="crew">
+                <h2>Crew</h2>
+                <div class="leaderboard-header">
+                    <span class="name">Player</span>
+                    <span class="stats">
+                        <span class="stat kills">Damage</span>
+                        <span class="stat fixes">Fixes</span>
+                        <span class="stat score">Score</span>
+                    </span>
+                </div>
+                <ol class="leaderboard-list" data-role="crew"></ol>
+            </div>
+
+            <div class="saboteur">
+                <h2>Saboteur</h2>
+                <div class="leaderboard-header">
+                    <span class="name">Player</span>
+                    <span class="stats">
+                        <span class="stat kills">Damage</span>
+                        <span class="stat fixes">Fixes</span>
+                        <span class="stat score">Score</span>
+                    </span>
+                </div>
+                <ol class="leaderboard-list" data-role="saboteur"></ol>
+            </div>
+            </section>
+        </div>
+        <button id="index" onclick="window.location.href='index.html'">
+            Back to home
+        </button>
+
+    </div>
+    <script type="module" src="src/core/gameleaderboard.js"></script>
+</body>
+</html>

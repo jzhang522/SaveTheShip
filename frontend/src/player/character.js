@@ -36,6 +36,7 @@ export class Character {
     this.isDead = false;
     this._onHpChange = null; // callback: (hp, maxHp, isDead) => void
     this._onDeath = null;    // callback: () => void
+    this._playerDying = null;   // callback: () => void, called when player dies to notify server
 
     this.shipMeshes = [];
 
@@ -72,6 +73,10 @@ export class Character {
     this.warpToSpawn();
     if (this._onHpChange) this._onHpChange(this.hp, this.maxHp, this.isDead);
     if (this._onDeath) this._onDeath();
+  }
+
+  _playerDying() {
+    if (this._playerDying) this._playerDying();
   }
 
   /**

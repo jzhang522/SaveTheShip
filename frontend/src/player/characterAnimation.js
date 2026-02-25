@@ -26,6 +26,9 @@ export class CharacterAnimation {
     this.isAttacking = false;
     this.spotlightOn = true;
 
+    this.hitAnimationName = 'Hit';
+    this.deathAnimationName = 'Death';
+
     this.group = new THREE.Group();
     this.fbxModel = null;
     this.fbxLoaded = false;

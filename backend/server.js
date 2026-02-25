@@ -103,9 +103,9 @@ async function loadRolesFromDB(lobbyId) {
 
 const TABLE_NAME = "SaveTheShipGameLobbies";
 
-// Validate that player exists in lobby in DynamoDB (required for lobbyId from matchmaking)
+// Validate that player exists in lobby in DynamoDB and return player data (DDB is single source of truth)
 async function validatePlayerInLobby(lobbyId, playerId) {
-  if (!lobbyId || !playerId) return false;
+  if (!lobbyId || !playerId) return null;
   try {
     const res = await ddb.send(new GetCommand({
       TableName: TABLE_NAME,
@@ -113,12 +113,12 @@ async function validatePlayerInLobby(lobbyId, playerId) {
     }));
     if (!res.Item) {
       console.log(`[Join] Player not in DynamoDB lobby (may have left or been removed)`);
-      return false;
+      return null;
     }
-    return true;
+    return res.Item;
   } catch (err) {
     console.error("[Join] DynamoDB validation failed (check AWS credentials/region):", err.message);
-    return false;
+    return null;
   }
 }
 
@@ -283,7 +283,7 @@ async function setLobbyStatusFinished(lobbyId) {
   }
 }
 
-// Update player rows in DynamoDB with damageDone, fixedHp, score
+// Update player rows in DynamoDB with damageDone, fixedHp, score, playerName (DDB single source of truth)
 async function updatePlayerStatsInDynamoDB(lobbyId, playerStats) {
   if (!lobbyId || !String(lobbyId).startsWith('LOBBY#')) return;
   try {
@@ -291,11 +291,12 @@ async function updatePlayerStatsInDynamoDB(lobbyId, playerStats) {
       await ddb.send(new UpdateCommand({
         TableName: TABLE_NAME,
         Key: { PK: lobbyId, SK: `PLAYER#${playerId}` },
-        UpdateExpression: 'SET damageDone = :dd, fixedHp = :fh, score = :s',
+        UpdateExpression: 'SET damageDone = :dd, fixedHp = :fh, score = :s, playerName = :pn',
         ExpressionAttributeValues: {
           ':dd': stats.damageDone ?? 0,
           ':fh': stats.fixedHp ?? 0,
-          ':s': stats.score ?? 0
+          ':s': stats.score ?? 0,
+          ':pn': (stats.name != null ? String(stats.name) : 'Player')
         }
       }));
     }
@@ -321,7 +322,7 @@ function scheduleGameStart(gameId) {
       clearInterval(game.countdownTimer);
       game.countdownTimer = null;
       await invokeStartGameLambda(gameId);
-      startGame(gameId);
+      await startGame(gameId);
       broadcastToGame(gameId, { type: 'gameStart', gameId });
     }
   }, 1000);
@@ -339,8 +340,8 @@ function selectPanelsNeedFix() {
   return allIds.slice(0, PANELS_NEED_FIX);
 }
 
-// Assign roles: one random saboteur, rest are crew. Set HP accordingly.
-function assignRoles(game) {
+// Fallback: assign roles randomly (only for non-matchmaking lobbies when DDB has no roles)
+function assignRolesFallback(game) {
   const playerIds = Array.from(game.players.keys());
   const saboteurIdx = Math.floor(Math.random() * playerIds.length);
 
@@ -358,7 +359,6 @@ function assignRoles(game) {
     player.isDead = false;
   });
 
-  // Send each player their own role assignment (private)
   game.players.forEach((player) => {
     if (player.ws?.readyState === WebSocket.OPEN) {
       player.ws.send(JSON.stringify({
@@ -370,18 +370,58 @@ function assignRoles(game) {
     }
   });
 
-  console.log(`[Roles] Game ${game.id}: saboteur=${playerIds[saboteurIdx]}, crew=${playerIds.filter((_, i) => i !== saboteurIdx).join(', ')}`);
+  console.log(`[Roles] Game ${game.id}: fallback random assign — saboteur=${playerIds[saboteurIdx]}`);
 }
 
-// Start the game: assign roles, select broken panels, set their HP to 0, and notify all players
-function startGame(gameId) {
+// Apply roles from DynamoDB and notify players
+function applyRolesFromDB(game, roles) {
+  const playerIds = Array.from(game.players.keys());
+  playerIds.forEach((pid) => {
+    const player = game.players.get(pid);
+    const role = roles[pid];
+    player.role = role === 'saboteur' ? 'saboteur' : 'crew';
+    player.maxHp = player.role === 'saboteur' ? SABOTEUR_HP : CREW_HP;
+    player.hp = player.maxHp;
+    player.isDead = false;
+  });
+
+  game.players.forEach((player) => {
+    if (player.ws?.readyState === WebSocket.OPEN) {
+      player.ws.send(JSON.stringify({
+        type: 'roleAssignment',
+        role: player.role,
+        maxHp: player.maxHp,
+        hp: player.hp
+      }));
+    }
+  });
+
+  const saboteur = playerIds.find((pid) => game.players.get(pid).role === 'saboteur');
+  console.log(`[Roles] Game ${game.id}: loaded from DDB — saboteur=${saboteur}, crew=${playerIds.filter((p) => p !== saboteur).join(', ')}`);
+}
+
+// Start the game: load roles from DynamoDB (single source of truth), select broken panels, notify players
+async function startGame(gameId) {
   const game = games.get(gameId);
   if (!game || game.state === 'playing') return;
 
   game.state = 'playing';
 
-  // Assign roles & HP
-  assignRoles(game);
+  // Load roles from DynamoDB (Lambda writes them when startGame is invoked)
+  let roles = {};
+  if (gameId && String(gameId).startsWith('LOBBY#')) {
+    roles = await loadRolesFromDB(gameId);
+  }
+
+  const playerIds = Array.from(game.players.keys());
+  const hasRolesForAll = playerIds.length > 0 && playerIds.every((pid) => roles[pid] === 'crew' || roles[pid] === 'saboteur');
+
+  if (hasRolesForAll) {
+    applyRolesFromDB(game, roles);
+  } else {
+    // Fallback for non-matchmaking lobbies or DDB failure
+    assignRolesFallback(game);
+  }
 
   const brokenPanelIds = selectPanelsNeedFix();
 
@@ -681,22 +721,35 @@ wss.on('connection', (ws) => {
     try {
       const message = JSON.parse(data);
       
-      // Player joins game (lobbyId/playerId from Lambda, or generated)
+      // Player joins game (lobbyId/playerId required from matchmaking — no crafted joins)
       if (message.type === 'join') {
         const lobbyId = typeof message.lobbyId === 'string' ? message.lobbyId.trim() : message.lobbyId;
-        playerId = (message.playerId && String(message.playerId).trim()) || generateId();
-        const playerName = message.name || `Player_${playerId.substr(0, 5)}`;
+        const rawPlayerId = message.playerId && String(message.playerId).trim();
 
-        // Validate against DynamoDB when lobbyId is provided (from matchmaking)
-        if (lobbyId && playerId) {
-          const isValid = await validatePlayerInLobby(lobbyId, playerId);
-          if (!isValid) {
-            console.log(`[Join] Rejected: invalid lobby session lobbyId=${lobbyId} playerId=${playerId}`);
-            ws.send(JSON.stringify({ type: 'error', message: 'Invalid lobby session' }));
-            ws.close();
-            return;
-          }
+        // Require valid matchmaking credentials — reject crafted joins
+        if (!lobbyId || !String(lobbyId).startsWith('LOBBY#')) {
+          console.log(`[Join] Rejected: lobbyId required and must be from matchmaking (LOBBY#...)`);
+          ws.send(JSON.stringify({ type: 'error', message: 'Invalid lobby: join via matchmaking only' }));
+          ws.close();
+          return;
         }
+        if (!rawPlayerId) {
+          console.log(`[Join] Rejected: playerId required`);
+          ws.send(JSON.stringify({ type: 'error', message: 'Invalid session: playerId required' }));
+          ws.close();
+          return;
+        }
+        playerId = rawPlayerId;
+
+        const playerItem = await validatePlayerInLobby(lobbyId, playerId);
+        if (!playerItem) {
+          console.log(`[Join] Rejected: player not in DynamoDB lobby lobbyId=${lobbyId} playerId=${playerId}`);
+          ws.send(JSON.stringify({ type: 'error', message: 'Invalid lobby session' }));
+          ws.close();
+          return;
+        }
+        // Use playerName from DDB (single source of truth)
+        const playerName = playerItem.playerName || message.name || `Player_${playerId.substr(0, 5)}`;
 
         gameId = findOrCreateGameByLobbyId(lobbyId, playerId, playerName);
         const game = games.get(gameId);
@@ -847,18 +900,17 @@ wss.on('connection', (ws) => {
           }
 
           if (closestId) {
-            const targetPlayer = game.players.get(closestId);
-            if (targetPlayer && targetPlayer.ws?.readyState === WebSocket.OPEN) {
-              targetPlayer.ws.send(JSON.stringify({
-                type: 'playerHit',
-                attackerId: playerId,
-                targetId: closestId
-              }));
-              // Track attack damage
-              const stats = game.playerStats.get(playerId) || { damageDone: 0, fixedHp: 0 };
-              stats.damageDone += 1;
-              game.playerStats.set(playerId, stats);
-            }
+            // Track attack damage
+            const stats = game.playerStats.get(playerId) || { damageDone: 0, fixedHp: 0 };
+            stats.damageDone += 1;
+            game.playerStats.set(playerId, stats);
+
+            console.log(`Player ${playerId} attacked player ${closestId} for 1 damage! Total damage done: `);
+            broadcastToGame(gameId, {
+              type: 'playerHit',
+              attackerId: playerId,
+              targetId: closestId,
+            });
           }
 
           // Panel attack detection: check if any panel is in attack range
@@ -914,6 +966,16 @@ wss.on('connection', (ws) => {
           console.log(`Player ${playerId} has died`);
           // Check if this death triggers a win condition
           checkWinConditions(gameId);
+        }
+      }
+
+      if (message.type === 'playerDying' && playerId && gameId) {
+        const game = games.get(gameId);
+        if (game) {
+          broadcastToGame(gameId, {
+            type: 'playerDying',
+            playerId: playerId
+          });
         }
       }
 

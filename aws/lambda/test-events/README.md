@@ -53,25 +53,25 @@ Test events for the matchmaking Lambda (`save_the_ship-api-matchmaking.mjs`). Us
 
 ## finish-game-event.json
 
-**Action:** `finish` — Set lobby status to finished.
+**Action:** `finish` — Set lobby status to finished (requires `ADMIN_SECRET`).
 
-**Body:** `action`, `lobbyId`
+**Body:** `action`, `lobbyId`, `secret`
 
-**Placeholders:** Replace `lobby-1708500000000` with a real lobby ID (e.g. `LOBBY#uuid`).
+**Placeholders:** Replace `LOBBY#test-uuid` with a real lobby ID. Replace `<ADMIN_SECRET>` with the Lambda's `ADMIN_SECRET` env var.
 
-**Expected:** 200 with `{ "message": "Lobby set to finished" }`
+**Expected:** 200 with `{ "message": "Lobby set to finished" }` (403 if secret missing/invalid)
 
 ---
 
 ## expire-event.json
 
-**Action:** `expire` — Set lobby status to expired.
+**Action:** `expire` — Set lobby status to expired (requires `ADMIN_SECRET`).
 
-**Body:** `action`, `lobbyId`
+**Body:** `action`, `lobbyId`, `secret`
 
-**Placeholders:** Replace `lobby-1708500000000` with a real lobby ID (e.g. `LOBBY#uuid`).
+**Placeholders:** Replace `LOBBY#test-uuid` with a real lobby ID. Replace `<ADMIN_SECRET>` with the Lambda's `ADMIN_SECRET` env var.
 
-**Expected:** 200 with `{ "message": "Lobby set to expired" }`
+**Expected:** 200 with `{ "message": "Lobby set to expired" }` (403 if secret missing/invalid)
 
 ---
 
