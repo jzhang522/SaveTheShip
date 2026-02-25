@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Leaderboard</title>
+    <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="styles/leaderboard.css">
+    
+
+</head>
+<body>
+    <div class="leaderboard-container">
+        <h1>Leaderboard</h1>
+        <section class="leaderboard-area">
+            <div class="crew">
+                <h2>Crew</h2>
+                <ol class="leaderboard-list" data-role="crew"></ol>
+            </div>
+
+            <div class="saboteur">
+                <h2>Saboteur</h2>
+                <ol class="leaderboard-list" data-role="saboteur"></ol>
+            </div>
+        </section>
+        <button id="index" onclick="window.location.href='index.html'">
+            Back to home
+        </button>
+
+    </div>
+    <script src="src/core/gameleaderboard.js"></script>
+</body>
+</html>
