@@ -18,8 +18,8 @@ const GAME_WIDTH = 1400;
 const GAME_HEIGHT = 800;
 const PLAYER_SIZE = 20;
 const MAX_PLAYERS_PER_GAME = 5;
-const MIN_PLAYERS_PER_GAME = 2; // TODO: Change to 2
-const LOBBY_COUNTDOWN_SECONDS = 3; // TODO: Change to 10
+const MIN_PLAYERS_PER_GAME = 3; // TODO: Change to 2
+const LOBBY_COUNTDOWN_SECONDS = 5; // TODO: Change to 10
 
 const TOTAL_PANELS = 8;
 const PANELS_NEED_FIX = 4;
@@ -47,6 +47,20 @@ const PANEL_POSITIONS = [
 
 // HTTP server
 const server = http.createServer();
+
+// Health check for ALB/load balancers (must not handle WebSocket upgrade requests)
+server.on('request', (req, res) => {
+  if (req.headers.upgrade && req.headers.upgrade.toLowerCase() === 'websocket') {
+    return; // Let ws library handle via upgrade event
+  }
+  if (req.url === '/health' && req.method === 'GET') {
+    res.writeHead(200, { 'Content-Type': 'text/plain' });
+    res.end('OK');
+    return;
+  }
+  res.writeHead(404);
+  res.end();
+});
 
 // WebSocket server
 const wss = new WebSocket.Server({ server });

@@ -92,8 +92,8 @@ export class GameLogic {
   }
 
   getWebSocketUrl() {
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const localEndpoint = import.meta.env.VITE_SERVER_ENDPOINT || 'localhost:8080';
+    const protocol = window.location.protocol === 'https:' ? 'ws:' : 'ws:';
+    const localEndpoint = import.meta.env.VITE_SERVER_ENDPOINT;
     const useLocalWs = import.meta.env.VITE_USE_LOCAL_WS === 'true';
 
     if (useLocalWs) {
@@ -105,7 +105,7 @@ export class GameLogic {
     if (!endpoint || typeof endpoint !== 'string' || endpoint.includes('?') || endpoint.length < 5) {
       endpoint = localEndpoint;
     }
-    if (endpoint.startsWith('ws://') || endpoint.startsWith('wss://')) {
+    if (endpoint.startsWith('ws://') || endpoint.startsWith('ws://')) {
       return endpoint;
     }
     return `${protocol}//${endpoint}`;
