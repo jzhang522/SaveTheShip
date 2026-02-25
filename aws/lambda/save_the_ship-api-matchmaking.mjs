@@ -61,9 +61,9 @@
                 case "start":
                     return await startGame(lobbyId, body.secret);
                 case "finish":
-                    return await updateStatus(lobbyId, "finished", 300);
+                    return await updateStatus(lobbyId, "finished", 300, body.secret);
                 case "expire":
-                    return await updateStatus(lobbyId, "expired", 60);
+                    return await updateStatus(lobbyId, "expired", 60, body.secret);
                 default:
                     return response(400, { message: "Invalid action" });
             }
@@ -389,20 +389,34 @@
     }
 
     // -------------------------
-    // Update lobby status
+    // Update lobby status (finish/expire - trusted callers only)
     // -------------------------
-    async function updateStatus(lobbyId, newStatus, ttlSeconds) {
+    async function updateStatus(lobbyId, newStatus, ttlSeconds, secret) {
         if (!lobbyId) return response(400, { message: "lobbyId required" });
+        if (!String(lobbyId).startsWith("LOBBY#")) {
+            return response(400, { message: "Invalid lobbyId format" });
+        }
+        const expectedSecret = process.env.ADMIN_SECRET;
+        if (!expectedSecret || secret !== expectedSecret) {
+            return response(403, { message: "Unauthorized" });
+        }
         const now = Math.floor(Date.now() / 1000);
 
-        await ddb.send(new UpdateCommand({
-            TableName: TABLE_NAME,
-            Key: { PK: lobbyId, SK: "METADATA" },
-            UpdateExpression: "SET #s = :status, #ttl = :ttlVal",
-            ExpressionAttributeNames: { "#s": "status", "#ttl": "ttl" },
-            ExpressionAttributeValues: { ":status": newStatus, ":ttlVal": now + ttlSeconds }
-        }));
-
+        try {
+            await ddb.send(new UpdateCommand({
+                TableName: TABLE_NAME,
+                Key: { PK: lobbyId, SK: "METADATA" },
+                UpdateExpression: "SET #s = :status, #ttl = :ttlVal",
+                ConditionExpression: "attribute_exists(PK)",
+                ExpressionAttributeNames: { "#s": "status", "#ttl": "ttl" },
+                ExpressionAttributeValues: { ":status": newStatus, ":ttlVal": now + ttlSeconds }
+            }));
+        } catch (err) {
+            if (err.name === "ConditionalCheckFailedException") {
+                return response(404, { message: "Lobby not found" });
+            }
+            throw err;
+        }
         return response(200, { message: `Lobby set to ${newStatus}` });
     }
 
