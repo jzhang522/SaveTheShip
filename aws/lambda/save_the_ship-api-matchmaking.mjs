@@ -1,4 +1,4 @@
-    import { randomInt } from "crypto";
+    import { randomInt, createHmac, timingSafeEqual } from "crypto";
     import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
     import {
         DynamoDBDocumentClient,
@@ -15,6 +15,23 @@
 
     const TABLE_NAME = "SaveTheShipGameLobbies";
     const GSI_NAME = "status-playerCount-index";
+
+    function createLeaveToken(lobbyId, playerId) {
+        const secret = process.env.LEAVE_TOKEN_SECRET;
+        if (!secret) return null;
+        return createHmac("sha256", secret).update(`${lobbyId}|${playerId}`).digest("base64url");
+    }
+
+    function verifyLeaveToken(lobbyId, playerId, token) {
+        const expected = createLeaveToken(lobbyId, playerId);
+        if (!expected || !token || typeof token !== "string") return false;
+        if (expected.length !== token.length) return false;
+        try {
+            return timingSafeEqual(Buffer.from(expected, "utf8"), Buffer.from(token, "utf8"));
+        } catch {
+            return false;
+        }
+    }
     const MAX_PLAYERS = 5;
     const MIN_PLAYERS = 2;
     const SERVER_ENDPOINT = "????????????????????????????????????????"; // TODO: Change to the actual server endpoint
@@ -40,7 +57,7 @@
                 case "validateSession":
                     return await handleValidateSession(lobbyId, body.playerId);
                 case "leave":
-                    return await handleLeave(lobbyId, body.playerId);
+                    return await handleLeave(lobbyId, body.playerId, body.leaveToken);
                 case "start":
                     return await startGame(lobbyId, body.secret);
                 case "finish":
@@ -134,9 +151,11 @@
                         }
                     }));
 
+                    const leaveToken = createLeaveToken(lobby.PK, playerId);
                     return response(200, {
                         lobbyId: lobby.PK,
                         playerId,
+                        leaveToken,
                         status: newStatus,
                         serverEndpoint: lobby.serverEndpoint
                     });
@@ -181,9 +200,11 @@
             }
         }));
 
+        const leaveToken = createLeaveToken(newLobbyId, playerId);
         return response(200, {
             lobbyId: newLobbyId,
             playerId,
+            leaveToken,
             status: "waiting",
             serverEndpoint: SERVER_ENDPOINT
         });
@@ -216,7 +237,8 @@
             if (!validStatuses.includes(lobby.status)) {
                 return response(200, { valid: false });
             }
-            return response(200, { valid: true });
+            const leaveToken = createLeaveToken(lobbyId, playerId);
+            return response(200, { valid: true, leaveToken });
         } catch (err) {
             console.error("validateSession error:", err);
             return response(200, { valid: false });
@@ -226,12 +248,15 @@
     // -------------------------
     // Remove player from lobby (browser close, leave button, etc.)
     // -------------------------
-    async function handleLeave(lobbyId, playerId) {
+    async function handleLeave(lobbyId, playerId, leaveToken) {
         if (!lobbyId || !playerId) {
             return response(400, { ok: false, message: "lobbyId and playerId required" });
         }
         if (!String(lobbyId).startsWith("LOBBY#")) {
             return response(400, { ok: false, message: "Invalid lobbyId format" });
+        }
+        if (!verifyLeaveToken(lobbyId, playerId, leaveToken)) {
+            return response(403, { ok: false, message: "Invalid or missing leave token" });
         }
         try {
             await ddb.send(new DeleteCommand({
