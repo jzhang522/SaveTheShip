@@ -16,7 +16,7 @@ export const handler = async () => {
         "#entityType": "entityType",
       },
       ExpressionAttributeValues: {
-        ":playerType": "player",
+        ":playerType": "PLAYER",
       },
     });
 

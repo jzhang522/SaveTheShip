@@ -1,6 +1,6 @@
 // leaderboard.js
 
-const API_URL = import.meta.env.VITE_API_URL;
+const API_URL = import.meta.env.VITE_LEADERBOARD_API_URL;
 
 // Fetch leaderboard from backend
 async function fetchLeaderboard() {
