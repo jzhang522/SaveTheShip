@@ -194,13 +194,25 @@ export class EventManager {
   }
 
   static setupWindow(game) {
-    window.addEventListener('resize', () => {
-      const width = window.innerWidth - 320;
-      const height = window.innerHeight - 100;
-      game.camera.aspect = width / height;
-      game.camera.updateProjectionMatrix();
-      game.renderer.setSize(width, height);
-    });
+    function resizeRenderer() {
+      const container = document.getElementById('gameContainer');
+      if (!container) return;
+      const width = container.clientWidth;
+      const height = container.clientHeight;
+      if (width > 0 && height > 0) {
+        game.camera.aspect = width / height;
+        game.camera.updateProjectionMatrix();
+        game.renderer.setSize(width, height);
+      }
+    }
+
+    window.addEventListener('resize', resizeRenderer);
+    // ResizeObserver handles container size changes (e.g. flex layout)
+    const container = document.getElementById('gameContainer');
+    if (container && typeof ResizeObserver !== 'undefined') {
+      new ResizeObserver(resizeRenderer).observe(container);
+    }
+    resizeRenderer();
 
     document.addEventListener('visibilitychange', () => {
       if (document.hidden) game.clock.getElapsedTime();

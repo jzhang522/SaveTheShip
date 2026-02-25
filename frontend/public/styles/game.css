@@ -1,6 +1,15 @@
-/* Chat toggle button - round, bottom right of game area */
+/* Game area - canvas fills container */
 #gameContainer {
     position: relative;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+}
+
+#gameContainer canvas {
+    width: 100%;
+    height: 100%;
+    display: block;
 }
 
 .chat-toggle-btn {
