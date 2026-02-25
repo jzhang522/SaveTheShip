@@ -20,6 +20,13 @@ export default defineConfig({
   ],
   build: {
     target: 'esnext',
-    minify: 'terser'
+    minify: 'terser',
+    rollupOptions: {
+      input: {
+        main: 'index.html',
+        game: 'game.html',
+        leaderboard: 'leaderboard.html'
+      }
+    }
   }
 })

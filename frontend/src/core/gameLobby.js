@@ -1,7 +1,7 @@
 "use strict";
 
 const API_URL = import.meta.env.VITE_API_URL;
-const SERVER_ENDPOINT = import.meta.env.VITE_SERVER_ENDPOINT || "localhost:8080";
+const SERVER_ENDPOINT = import.meta.env.VITE_SERVER_ENDPOINT;
 const USE_LOCAL_WS = import.meta.env.VITE_USE_LOCAL_WS === "true";
 
 const MAX_LOBBY_PLAYERS = 5;
@@ -11,13 +11,13 @@ let currentPlayerName = null;
 
 function getWebSocketUrl(data) {
     if (USE_LOCAL_WS) {
-        const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+        const protocol = window.location.protocol === "https:" ? "ws:" : "ws:";
         return SERVER_ENDPOINT.startsWith("ws") ? SERVER_ENDPOINT : `${protocol}//${SERVER_ENDPOINT}`;
     }
-    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const protocol = window.location.protocol === "https:" ? "ws:" : "ws:";
     const endpoint = data?.serverEndpoint ?? data?.ServerEndpoint;
     if (endpoint && typeof endpoint === "string" && endpoint.length > 2) {
-        if (endpoint.startsWith("ws://") || endpoint.startsWith("wss://")) {
+        if (endpoint.startsWith("ws://") || endpoint.startsWith("ws://")) {
             return endpoint;
         }
         return `${protocol}//${endpoint}`;
