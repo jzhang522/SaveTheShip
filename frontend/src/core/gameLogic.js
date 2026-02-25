@@ -76,12 +76,33 @@ export class GameLogic {
       this.scene3d.setLocalSpotlightVisible(false);
       this.scene3d.setAmbientLightEnabled(true);
 
+      // Notify server so other players can hide this player
+      if (this.ws?.readyState === WebSocket.OPEN) {
+        this.ws.send(JSON.stringify({ type: 'playerDied' }));
+      }
     };
 
     this.character._playerDying = () => {
       // Notify server so other players can hide this player
-      if (this.ws?.readyState === WebSocket.OPEN) {
-        this.ws.send(JSON.stringify({ type: 'playerDying' }));
+      try {
+        if (this.ws?.readyState === WebSocket.OPEN) {
+          const result = this.ws.send(JSON.stringify({ type: 'playerDying' }));
+          if (result instanceof Promise) {
+            result.catch((err) => {
+              if (err && err.name === 'SecurityError') {
+                console.warn('SecurityError: User exited lock before request completed.', err);
+              } else {
+                console.error('Error sending playerDying:', err);
+              }
+            });
+          }
+        }
+      } catch (err) {
+        if (err && err.name === 'SecurityError') {
+          console.warn('SecurityError: User exited lock before request completed.', err);
+        } else {
+          console.error('Error sending playerDying:', err);
+        }
       }
     }
   }

@@ -306,14 +306,13 @@ export class MessageHandler {
 
               } else {
 
-                game.character.informDeath(); // Notify server of death if HP reaches 0
+                game.character._playerDying(); // Notify server of death if HP reaches 0
 
                 setTimeout(() => {
                   if (localPlayer && localPlayer.fbxLoaded) {
                     if (localPlayer.currentAnimation !== localPlayer.deathAnimationName) {
                       localPlayer.playAnimation(localPlayer.deathAnimationName || 'Death');
                     }
-                    
 
                     // Wait for death animation duration, then mark as dead
                     setTimeout(() => {
@@ -354,28 +353,23 @@ export class MessageHandler {
   } 
 
   static handleDyingPlayer(game, message) {
-    if (message.playerId !== game.playerId) {
-
-      console.log("💀 Player died:", message.playerId);
+    if (message.playerId !== game.character.id) {
       const character = game.otherPlayers.get(message.playerId);
-      const anim = character?._model || character;
-
-      setTimeout(() => {
-        if (anim.currentAnimation !== anim.deathAnimationName) {
-          anim.playAnimation(anim.deathAnimationName || 'Death');
-          // Wait for death animation duration, then mark as dead
+      if (character) {
+        const anim = character._model || character;
+  
+        // Play hit animation if not already playing hit or death animation
+        console.log("💀 Player died:", character, anim);
+        if (typeof anim.playAnimation === 'function') {
+          anim.playAnimation(anim.hitAnimationName || 'Hit');
           setTimeout(() => {
-            anim.isDead = true;
-          }, 2100);
+            anim.playAnimation(anim.deathAnimationName || 'Death');
+          }, 500);
         } else {
-          anim.playAnimation(anim.deathAnimationName || 'Death');
-          // Fallback: mark dead after 2s if no animation
-          setTimeout(() => {
-            anim.isDead = true;
-          }, 2100);
+          console.warn('handleDyingPlayer: anim.playAnimation is not a function for playerId', message.playerId);
         }
-      }, 350);
-    }
+      }
+    } 
   }
 
   static handleRoleAssignment(game, message) {
