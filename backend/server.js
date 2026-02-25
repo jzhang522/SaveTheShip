@@ -914,18 +914,17 @@ wss.on('connection', (ws) => {
           }
 
           if (closestId) {
-            const targetPlayer = game.players.get(closestId);
-            if (targetPlayer && targetPlayer.ws?.readyState === WebSocket.OPEN) {
-              targetPlayer.ws.send(JSON.stringify({
-                type: 'playerHit',
-                attackerId: playerId,
-                targetId: closestId
-              }));
-              // Track attack damage
-              const stats = game.playerStats.get(playerId) || { damageDone: 0, fixedHp: 0 };
-              stats.damageDone += 1;
-              game.playerStats.set(playerId, stats);
-            }
+            // Track attack damage
+            const stats = game.playerStats.get(playerId) || { damageDone: 0, fixedHp: 0 };
+            stats.damageDone += 1;
+            game.playerStats.set(playerId, stats);
+
+            console.log(`Player ${playerId} attacked player ${closestId} for 1 damage! Total damage done: `);
+            broadcastToGame(gameId, {
+              type: 'playerHit',
+              attackerId: playerId,
+              targetId: closestId,
+            });
           }
 
           // Panel attack detection: check if any panel is in attack range
@@ -981,6 +980,16 @@ wss.on('connection', (ws) => {
           console.log(`Player ${playerId} has died`);
           // Check if this death triggers a win condition
           checkWinConditions(gameId);
+        }
+      }
+
+      if (message.type === 'playerDying' && playerId && gameId) {
+        const game = games.get(gameId);
+        if (game) {
+          broadcastToGame(gameId, {
+            type: 'playerDying',
+            playerId: playerId
+          });
         }
       }
 

@@ -48,6 +48,9 @@ export class MessageHandler {
       case 'playerHit':
         this.handlePlayerHit(game, message);
         break;
+      case 'playerDying':
+        this.handleDyingPlayer(game, message);
+        break;
       case 'roleAssignment':
         this.handleRoleAssignment(game, message);
         break;
@@ -266,29 +269,109 @@ export class MessageHandler {
     // This local player was hit by another player's attack
     if (message.targetId === game.playerId) {
       if (game.character && !game.character.isDead) {
-        // Cancel fixing if player is hit while fixing
-        if (game.character.isFixing) {
-          const fixingPanelId = game.character._fixingPanelId;
-          game.character.isFixing = false;
-          game.character._fixingPanelId = null;
-          if (game.character._fixSafetyTimeout) {
-            clearTimeout(game.character._fixSafetyTimeout);
-            game.character._fixSafetyTimeout = null;
+        const localPlayer = game.players.get(game.playerId)?._model;
+        
+        setTimeout(() => {
+          if (localPlayer && localPlayer.fbxLoaded) {
+            // Cancel fixing if player is hit while fixing
+            if (game.character.isFixing) {
+              const fixingPanelId = game.character._fixingPanelId;
+              game.character.isFixing = false;
+              game.character._fixingPanelId = null;
+
+              if (game.character._fixSafetyTimeout) {
+                clearTimeout(game.character._fixSafetyTimeout);
+                game.character._fixSafetyTimeout = null;
+                localPlayer.isFixing = false;
+              }
+            
+              // Tell server to stop the fixing interval
+              if (game.ws?.readyState === WebSocket.OPEN && fixingPanelId != null) {
+                game.ws.send(JSON.stringify({ type: 'stopFix', panelId: fixingPanelId }));
+              }
+            }
+
+            // Play hit animation if not already playing hit or death animation
+            if (localPlayer.currentAnimation !== localPlayer.hitAnimationName && localPlayer.currentAnimation !== localPlayer.deathAnimationName) {
+              localPlayer.playAnimation(localPlayer.hitAnimationName || 'Hit');
+
+              if (game.character.hp > 1) {
+                game.character.takeDamage();
+
+                // Play idle or run animation after hit animation duration, but only if not dead
+                setTimeout(() => {
+                  if (localPlayer && localPlayer.fbxLoaded && !game.character.isDead) {
+                    const nextAnim = game.character.isMoving ? localPlayer.runAnimationName : localPlayer.idleAnimationName;
+                    localPlayer.playAnimation(nextAnim || 'Idle');
+                  }
+                }, 440);
+
+              } else {
+
+                game.character._playerDying(); // Notify server of death if HP reaches 0
+
+                setTimeout(() => {
+                  if (localPlayer && localPlayer.fbxLoaded) {
+                    if (localPlayer.currentAnimation !== localPlayer.deathAnimationName) {
+                      localPlayer.playAnimation(localPlayer.deathAnimationName || 'Death');
+                    }
+
+                    // Wait for death animation duration, then mark as dead
+                    setTimeout(() => {
+                      game.character.takeDamage();
+                    }, 2200);
+                  } else {
+                    // Fallback: mark dead after 2.2s if no animation
+                    setTimeout(() => {
+                      game.character.takeDamage();
+                    }, 2200);
+                  }
+                }, 500);
+              }
+            }
           }
-          const localPlayer = game.players.get(game.playerId);
-          if (localPlayer?._model) {
-            localPlayer._model.isFixing = false;
-            localPlayer._model.playAnimation('Idle');
+        }, 350);
+      }
+    } else {
+      // Another player was hit — play Hit and Death animation on their character if needed
+      const character = game.otherPlayers.get(message.targetId);
+      const anim = character?._model || character;
+      if (anim && anim.fbxLoaded) {
+        setTimeout(() => {
+          // Play hit animation if not already playing hit or death animation
+          if (
+            anim.currentAnimation !== anim.hitAnimationName &&
+            anim.currentAnimation !== anim.deathAnimationName
+          ) {
+            anim.playAnimation(anim.hitAnimationName || 'Hit');
+            setTimeout(() => {
+              const nextAnim = anim.isMoving ? anim.runAnimationName : anim.idleAnimationName;
+              anim.playAnimation(nextAnim || 'Idle');
+            }, 440);
           }
-          // Tell server to stop the fixing interval
-          if (game.ws?.readyState === WebSocket.OPEN && fixingPanelId != null) {
-            game.ws.send(JSON.stringify({ type: 'stopFix', panelId: fixingPanelId }));
-          }
-        }
-        game.character.takeDamage();
-        console.log(`⚔ You were hit by ${message.attackerId}! HP: ${game.character.hp}`);
+        }, 350);
       }
     }
+  } 
+
+  static handleDyingPlayer(game, message) {
+    if (message.playerId !== game.character.id) {
+      const character = game.otherPlayers.get(message.playerId);
+      if (character) {
+        const anim = character._model || character;
+  
+        // Play hit animation if not already playing hit or death animation
+        console.log("💀 Player died:", character, anim);
+        if (typeof anim.playAnimation === 'function') {
+          anim.playAnimation(anim.hitAnimationName || 'Hit');
+          setTimeout(() => {
+            anim.playAnimation(anim.deathAnimationName || 'Death');
+          }, 500);
+        } else {
+          console.warn('handleDyingPlayer: anim.playAnimation is not a function for playerId', message.playerId);
+        }
+      }
+    } 
   }
 
   static handleRoleAssignment(game, message) {
