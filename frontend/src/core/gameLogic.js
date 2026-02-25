@@ -75,11 +75,15 @@ export class GameLogic {
       this.scene3d.setFogEnabled(false);
       this.scene3d.setLocalSpotlightVisible(false);
       this.scene3d.setAmbientLightEnabled(true);
+
+    };
+
+    this.character._playerDying = () => {
       // Notify server so other players can hide this player
       if (this.ws?.readyState === WebSocket.OPEN) {
-        this.ws.send(JSON.stringify({ type: 'playerDied' }));
+        this.ws.send(JSON.stringify({ type: 'playerDying' }));
       }
-    };
+    }
   }
 
   loadGameContext() {
