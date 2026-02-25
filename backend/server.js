@@ -321,7 +321,7 @@ function scheduleGameStart(gameId) {
       clearInterval(game.countdownTimer);
       game.countdownTimer = null;
       await invokeStartGameLambda(gameId);
-      startGame(gameId);
+      await startGame(gameId);
       broadcastToGame(gameId, { type: 'gameStart', gameId });
     }
   }, 1000);
@@ -339,8 +339,8 @@ function selectPanelsNeedFix() {
   return allIds.slice(0, PANELS_NEED_FIX);
 }
 
-// Assign roles: one random saboteur, rest are crew. Set HP accordingly.
-function assignRoles(game) {
+// Fallback: assign roles randomly (only for non-matchmaking lobbies when DDB has no roles)
+function assignRolesFallback(game) {
   const playerIds = Array.from(game.players.keys());
   const saboteurIdx = Math.floor(Math.random() * playerIds.length);
 
@@ -358,7 +358,6 @@ function assignRoles(game) {
     player.isDead = false;
   });
 
-  // Send each player their own role assignment (private)
   game.players.forEach((player) => {
     if (player.ws?.readyState === WebSocket.OPEN) {
       player.ws.send(JSON.stringify({
@@ -370,18 +369,58 @@ function assignRoles(game) {
     }
   });
 
-  console.log(`[Roles] Game ${game.id}: saboteur=${playerIds[saboteurIdx]}, crew=${playerIds.filter((_, i) => i !== saboteurIdx).join(', ')}`);
+  console.log(`[Roles] Game ${game.id}: fallback random assign — saboteur=${playerIds[saboteurIdx]}`);
 }
 
-// Start the game: assign roles, select broken panels, set their HP to 0, and notify all players
-function startGame(gameId) {
+// Apply roles from DynamoDB and notify players
+function applyRolesFromDB(game, roles) {
+  const playerIds = Array.from(game.players.keys());
+  playerIds.forEach((pid) => {
+    const player = game.players.get(pid);
+    const role = roles[pid];
+    player.role = role === 'saboteur' ? 'saboteur' : 'crew';
+    player.maxHp = player.role === 'saboteur' ? SABOTEUR_HP : CREW_HP;
+    player.hp = player.maxHp;
+    player.isDead = false;
+  });
+
+  game.players.forEach((player) => {
+    if (player.ws?.readyState === WebSocket.OPEN) {
+      player.ws.send(JSON.stringify({
+        type: 'roleAssignment',
+        role: player.role,
+        maxHp: player.maxHp,
+        hp: player.hp
+      }));
+    }
+  });
+
+  const saboteur = playerIds.find((pid) => game.players.get(pid).role === 'saboteur');
+  console.log(`[Roles] Game ${game.id}: loaded from DDB — saboteur=${saboteur}, crew=${playerIds.filter((p) => p !== saboteur).join(', ')}`);
+}
+
+// Start the game: load roles from DynamoDB (single source of truth), select broken panels, notify players
+async function startGame(gameId) {
   const game = games.get(gameId);
   if (!game || game.state === 'playing') return;
 
   game.state = 'playing';
 
-  // Assign roles & HP
-  assignRoles(game);
+  // Load roles from DynamoDB (Lambda writes them when startGame is invoked)
+  let roles = {};
+  if (gameId && String(gameId).startsWith('LOBBY#')) {
+    roles = await loadRolesFromDB(gameId);
+  }
+
+  const playerIds = Array.from(game.players.keys());
+  const hasRolesForAll = playerIds.length > 0 && playerIds.every((pid) => roles[pid] === 'crew' || roles[pid] === 'saboteur');
+
+  if (hasRolesForAll) {
+    applyRolesFromDB(game, roles);
+  } else {
+    // Fallback for non-matchmaking lobbies or DDB failure
+    assignRolesFallback(game);
+  }
 
   const brokenPanelIds = selectPanelsNeedFix();
 
@@ -681,21 +720,33 @@ wss.on('connection', (ws) => {
     try {
       const message = JSON.parse(data);
       
-      // Player joins game (lobbyId/playerId from Lambda, or generated)
+      // Player joins game (lobbyId/playerId required from matchmaking — no crafted joins)
       if (message.type === 'join') {
         const lobbyId = typeof message.lobbyId === 'string' ? message.lobbyId.trim() : message.lobbyId;
-        playerId = (message.playerId && String(message.playerId).trim()) || generateId();
-        const playerName = message.name || `Player_${playerId.substr(0, 5)}`;
+        const rawPlayerId = message.playerId && String(message.playerId).trim();
+        const playerName = message.name || (rawPlayerId ? `Player_${rawPlayerId.substr(0, 5)}` : 'Player');
 
-        // Validate against DynamoDB when lobbyId is provided (from matchmaking)
-        if (lobbyId && playerId) {
-          const isValid = await validatePlayerInLobby(lobbyId, playerId);
-          if (!isValid) {
-            console.log(`[Join] Rejected: invalid lobby session lobbyId=${lobbyId} playerId=${playerId}`);
-            ws.send(JSON.stringify({ type: 'error', message: 'Invalid lobby session' }));
-            ws.close();
-            return;
-          }
+        // Require valid matchmaking credentials — reject crafted joins
+        if (!lobbyId || !String(lobbyId).startsWith('LOBBY#')) {
+          console.log(`[Join] Rejected: lobbyId required and must be from matchmaking (LOBBY#...)`);
+          ws.send(JSON.stringify({ type: 'error', message: 'Invalid lobby: join via matchmaking only' }));
+          ws.close();
+          return;
+        }
+        if (!rawPlayerId) {
+          console.log(`[Join] Rejected: playerId required`);
+          ws.send(JSON.stringify({ type: 'error', message: 'Invalid session: playerId required' }));
+          ws.close();
+          return;
+        }
+        playerId = rawPlayerId;
+
+        const isValid = await validatePlayerInLobby(lobbyId, playerId);
+        if (!isValid) {
+          console.log(`[Join] Rejected: player not in DynamoDB lobby lobbyId=${lobbyId} playerId=${playerId}`);
+          ws.send(JSON.stringify({ type: 'error', message: 'Invalid lobby session' }));
+          ws.close();
+          return;
         }
 
         gameId = findOrCreateGameByLobbyId(lobbyId, playerId, playerName);
