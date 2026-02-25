@@ -26,9 +26,10 @@ async function fetchLeaderboard() {
 
 // Render leaderboard lists
 function renderLeaderboard(data) {
+  const TOP_N = 10;
   document.querySelectorAll(".leaderboard-list").forEach(list => {
     const role = list.dataset.role;
-    const players = data[role] || [];
+    const players = (data[role] || []).slice(0, TOP_N);
 
     list.innerHTML = "";
 
@@ -51,6 +52,16 @@ function renderLeaderboard(data) {
 
 // Load real data on page load
 document.addEventListener("DOMContentLoaded", async () => {
-  const leaderboardData = await fetchLeaderboard();
-  renderLeaderboard(leaderboardData);
+  const loadingEl = document.getElementById("leaderboardLoading");
+  const areaEl = document.getElementById("leaderboardArea");
+
+  try {
+    const leaderboardData = await fetchLeaderboard();
+    renderLeaderboard(leaderboardData);
+  } finally {
+    if (loadingEl) loadingEl.classList.add("hidden");
+    if (areaEl) {
+      areaEl.removeAttribute("aria-hidden");
+    }
+  }
 });

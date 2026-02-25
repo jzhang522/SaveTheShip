@@ -45,6 +45,11 @@ export const handler = async () => {
       }
     }
 
+    // Limit to top 10 per role
+    const TOP_N = 10;
+    const crewTop = crew.slice(0, TOP_N);
+    const saboteurTop = saboteur.slice(0, TOP_N);
+
     return {
     statusCode: 200,
     headers: {
@@ -52,8 +57,8 @@ export const handler = async () => {
         "Access-Control-Allow-Headers": "*"
     },
     body: JSON.stringify({
-        crew,
-        saboteur
+        crew: crewTop,
+        saboteur: saboteurTop
     })
 };
 

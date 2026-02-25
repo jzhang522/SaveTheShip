@@ -12,7 +12,12 @@
 <body>
     <div class="leaderboard-container">
         <h1>Leaderboard</h1>
-        <section class="leaderboard-area">
+        <div class="leaderboard-wrapper">
+            <div id="leaderboardLoading" class="leaderboard-loading">
+                <div class="leaderboard-loading-spinner"></div>
+                <p>Loading leaderboard...</p>
+            </div>
+            <section class="leaderboard-area" id="leaderboardArea" aria-hidden="true">
             <div class="crew">
                 <h2>Crew</h2>
                 <div class="leaderboard-header">
@@ -38,7 +43,8 @@
                 </div>
                 <ol class="leaderboard-list" data-role="saboteur"></ol>
             </div>
-        </section>
+            </section>
+        </div>
         <button id="index" onclick="window.location.href='index.html'">
             Back to home
         </button>
