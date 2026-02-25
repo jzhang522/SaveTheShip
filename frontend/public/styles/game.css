@@ -255,7 +255,7 @@
 /* ─── Role Indicator (persistent corner badge) ─── */
 .role-indicator {
     position: absolute;
-    top: 14px;
+    bottom: 14px;
     left: 14px;
     padding: 6px 16px;
     font-size: 13px;
